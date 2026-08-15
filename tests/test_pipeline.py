@@ -513,3 +513,114 @@ def test_text_numbers_in_source_are_read_and_reported(workspace, tmp_path, nomen
     notable = [c for c in block.coercions if not c.routine]
     assert [(c.field, c.source_ref) for c in notable] == [("Premium", "D9")]
     assert block.totals()["Premium"] == 87750.0
+
+
+# ──────────────────────────────────────────── §9.2 S1, S2, S10 step-2 rules
+
+def _relabel(block, labels):
+    """Rewrite the Year of each record, keeping everything else intact."""
+    for record, label in zip(block.records, labels):
+        record.values["Year"] = label
+    return block
+
+
+def test_S1_natural_sort_keeps_same_year_variants_adjacent(books, nomenclature):
+    b = _block(books, nomenclature, ROW_WISE)
+    _relabel(b, ["2026 9 months", "2024", "2026", "2025", "2026 6 months"])
+    result = apply_step2(b, step2_for(b.dataset.key))
+    assert [r.values["Year"] for r in result.records] == [
+        "2024", "2025", "2026", "2026 6 months", "2026 9 months",
+    ]
+
+
+def test_S1_natural_sort_orders_numerically_not_lexically(books, nomenclature):
+    b = _block(books, nomenclature, ROW_WISE)
+    _relabel(b, ["2021", "999", "2020", "10000", "2022"])
+    result = apply_step2(b, step2_for(b.dataset.key))
+    assert [r.values["Year"] for r in result.records] == [
+        "999", "2020", "2021", "2022", "10000",
+    ]
+
+
+def test_S1_labels_are_never_rewritten(books, nomenclature):
+    """The label is the identity — it must survive verbatim."""
+    b = _block(books, nomenclature, ROW_WISE)
+    _relabel(b, ["2026 9 months", "2024", "2025", "2026", "2023"])
+    result = apply_step2(b, step2_for(b.dataset.key))
+    assert "2026 9 months" in [r.values["Year"] for r in result.records]
+    assert len(result.records) == 5, "records must not be merged by numeric year"
+
+
+def test_S2_column_order_comes_from_sheet_00(books, nomenclature):
+    b = _block(books, nomenclature, ROW_WISE)
+    result = apply_step2(b, step2_for(b.dataset.key))
+    assert result.declared_columns == nomenclature.datasets[ROW_WISE].headers
+    assert result.columns == ("Year", "Premium", "Incurred Losses", "Loss Ratio %")
+
+
+def test_S2_step2_spec_declares_no_column_order():
+    """00 is the single source of truth for order — spec §9.2 S2."""
+    assert not hasattr(step2_for("01 History"), "column_order")
+
+
+def test_S10_overlapping_periods_raise_a_hypothesis(books, nomenclature):
+    from datatransform.extract import _check_period_overlap, _number_hypotheses
+
+    b = _block(books, nomenclature, ROW_WISE)
+    _relabel(b, ["2024", "2025", "2026", "2026 9 months", "2027"])
+    b.hypotheses.clear()
+    _check_period_overlap(b)
+    _number_hypotheses(b)
+
+    assert len(b.hypotheses) == 1
+    h = b.hypotheses[0]
+    assert h.id == "H-01"
+    assert h.attribute == "Period overlap 2026"
+    assert h.value == "2026 · 2026 9 months"
+    assert h.source == "tool"
+    assert "extraction rather than being a portfolio total" in h.note
+
+
+def test_S10_silent_when_every_period_is_distinct(books, nomenclature):
+    from datatransform.extract import _check_period_overlap
+
+    b = _block(books, nomenclature, ROW_WISE)
+    b.hypotheses.clear()
+    _check_period_overlap(b)
+    assert b.hypotheses == []
+
+
+def test_S10_flags_but_does_not_change_the_data(books, nomenclature):
+    from datatransform.extract import _check_period_overlap
+
+    b = _block(books, nomenclature, ROW_WISE)
+    _relabel(b, ["2024", "2025", "2026", "2026 9 months", "2027"])
+    before = [dict(r.values) for r in b.records]
+    totals = b.totals()
+    _check_period_overlap(b)
+    assert [dict(r.values) for r in b.records] == before
+    assert b.totals() == totals
+
+
+def test_S10_reaches_the_written_block(workspace, tmp_path):
+    """A pack carrying both a full year and a partial period surfaces the flag."""
+    from openpyxl import load_workbook as lw
+
+    from datatransform.recalc import inject
+
+    wb = lw(workspace)
+    ws = wb[ROW_WISE]
+    ws["B13"] = "2025 9 months"      # last record now overlaps 2025 in row 12
+    ws["B12"] = "2025"
+    wb.save(workspace)
+    # openpyxl strips cached formula results on save; restore them as Excel would
+    inject(workspace)
+
+    out = tmp_path / "out.xlsx"
+    report = run(workspace, out, tmp_path / "logs")
+    assert report.ok
+
+    ws = load_workbook(out, data_only=True)[ROW_WISE]
+    text = [c.value for row in ws.iter_rows() for c in row if isinstance(c.value, str)]
+    assert any("Period overlap 2025" in t for t in text)
+    assert "2025 9 months" in text, "the label must reach the output verbatim"

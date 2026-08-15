@@ -396,9 +396,10 @@ malformed — a number arriving as text, a date where a year was expected. Only 
 conversions appear in the step-1 block, since a block a human must read is worth keeping
 legible; both kinds reach the debug log.
 
-**Sorting.** With `Year` typed as text, a plain string sort would misorder the moment a
-pack carries `999` beside `2021`. Step 2 sorts on the numeric reading where one exists,
-then text, then absences — so years order naturally whatever form they take.
+**Why `Year` is text.** A pack can carry `2026` and `2026 9 months` — a full year and a
+partial period — as two separate records. The year alone therefore does not identify a
+record; **the full label does.** Kept as text, the label *is* the identity: never parsed
+back to a number, never normalised, never merged. See §9.2 S10.
 
 ---
 
@@ -433,6 +434,54 @@ sums.
 
 **Step 2 — normalised.** Sorted, columns reordered, calculations applied, with control
 sums tying back to step 1.
+
+### 9.2.1 Step-2 rules
+
+| | Rule | Kind |
+|---|---|---|
+| **S1** | Sort by the key field ascending, **natural alphanumeric** | value-preserving |
+| **S2** | Column order **exactly as declared in sheet 00** | value-preserving |
+| **S3** | Derived columns appended after the declared ones | value-adding |
+| **S4** | Derived measures written as **live Excel formulas** | value-adding |
+| **S5** | Provenance stays the leftmost column | — |
+| **S6** | Value-preserving steps must not move a numeric total; if one does, the run fails | check |
+| **S7** | Control sums tie back to step 1 and must be unchanged | check |
+| **S8** | Confidence carried forward from step 1 | — |
+| **S9** | Every rule applied is written into the block in plain language | — |
+| **S10** | Key labels preserved verbatim — never parsed, merged or de-duplicated. A repeated leading number raises an overlap hypothesis | — |
+
+**S1 — natural sort.** Each label splits into runs of digits and non-digits; digit runs
+compare as numbers, the rest as text. This keeps same-year variants adjacent *and*
+orders correctly by magnitude, which neither a plain string sort nor a numeric sort
+manages alone:
+
+```
+2021 · 2022 · 2023 · 2025 · 2025 9 months
+999  · 2020 · 2021 · 2022 · 10000
+```
+
+**S2 — order from sheet 00.** The target order is the order of D5, E5, F5 …, not a
+separate setting. This makes 00 the single source of truth for both *what* is extracted
+and *in what order* it appears, and it is what "columns swapped" means in practice: in
+the source, `Premium` sits in D and `Incurred Losses` in G with unrelated columns
+between them; step 2 puts them in declared order, adjacent.
+
+**S10 — overlapping periods.** When two extracted records share a leading number, the
+column total counts that year more than once:
+
+```
+H-04  Period overlap 2025  2025 · 2025 9 months  Assumed  open
+      Year 2025 appears 2 times as overlapping periods; the control sum counts
+      each of them, so it verifies extraction rather than being a portfolio total.
+```
+
+The tool **flags and changes nothing**. Which record to use is an underwriting
+judgment, not the tool's to make. The control sums remain valid for what they are:
+**they verify extraction fidelity, not business meaning.**
+
+A per-record ratio such as `Loss Ratio %` stays sound on a partial period, because
+premium and losses come from the same months. Only *comparing* it to a full year, or
+summing across overlapping periods, is not — which is what the flag exists to say.
 
 ### 9.3 Example — step 1 for `01. History`
 

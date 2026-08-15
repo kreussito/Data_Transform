@@ -44,20 +44,22 @@ class Calculation:
 
 @dataclass(frozen=True)
 class Step2Spec:
+    """Step-2 mechanics.
+
+    There is deliberately no ``column_order``: the output order is the order sheet 00
+    declares (spec §9.2 S2), so that 00 stays the single source of truth for both what
+    is extracted and in what order it appears.
+    """
+
     sort_by: tuple[str, ...]
     ascending: bool = True
-    column_order: tuple[str, ...] = ()
     calculations: tuple[Calculation, ...] = field(default_factory=tuple)
-
-    def output_columns(self) -> tuple[str, ...]:
-        return tuple(self.column_order) + tuple(c.name for c in self.calculations)
 
 
 STEP2: dict[str, Step2Spec] = {
     "01 History": Step2Spec(
         sort_by=("Year",),
         ascending=True,
-        column_order=("Year", "Premium", "Incurred Losses"),
         calculations=(
             Calculation(
                 name="Loss Ratio %",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from openpyxl.utils import column_index_from_string as col_idx
 from openpyxl.utils import get_column_letter as col_letter
 
@@ -13,6 +15,7 @@ from .model import (
     Confidence,
     Dataset,
     ExtractionError,
+    FieldType,
     Hypothesis,
     Orientation,
     Record,
@@ -21,6 +24,7 @@ from .nomenclature import Nomenclature, norm
 from .specs import field_types_for
 
 ERROR_CELLS = {"#REF!", "#N/A", "#VALUE!", "#DIV/0!", "#NAME?", "#NULL!", "#NUM!"}
+LEADING_NUMBER = re.compile(r"^\s*(\d+)")
 
 
 def last_non_empty_row(ws) -> int:
@@ -69,13 +73,12 @@ def _lenient(value, block: Block, label: str, ref: str):
 def _resolve_attributes(block: Block, markers, nomenclature: Nomenclature) -> None:
     """Attributes, hypotheses and derived confidence — spec §5."""
     found = attributes_for(markers, block.index)
-    counter = 1
 
     for name, marker in found.items():
         if name not in block.dataset.attributes:
             block.hypotheses.append(
                 Hypothesis(
-                    id=f"H-{counter:02d}",
+                    id="",
                     dataset_key=block.dataset.key,
                     attribute=name,
                     value=marker.value,
@@ -84,7 +87,6 @@ def _resolve_attributes(block: Block, markers, nomenclature: Nomenclature) -> No
                     note="attribute declared in the sheet but not listed in sheet 00",
                 )
             )
-            counter += 1
             continue
 
         if not nomenclature.validate_value(name, marker.value):
@@ -101,7 +103,7 @@ def _resolve_attributes(block: Block, markers, nomenclature: Nomenclature) -> No
         if attr is None:
             block.hypotheses.append(
                 Hypothesis(
-                    id=f"H-{counter:02d}",
+                    id="",
                     dataset_key=block.dataset.key,
                     attribute=name,
                     value=None,
@@ -110,11 +112,10 @@ def _resolve_attributes(block: Block, markers, nomenclature: Nomenclature) -> No
                     note="listed in sheet 00 but never declared in the sheet — nobody decided",
                 )
             )
-            counter += 1
         elif attr.is_hypothesis:
             block.hypotheses.append(
                 Hypothesis(
-                    id=f"H-{counter:02d}",
+                    id="",
                     dataset_key=block.dataset.key,
                     attribute=name,
                     value=attr.value,
@@ -123,7 +124,50 @@ def _resolve_attributes(block: Block, markers, nomenclature: Nomenclature) -> No
                     note=f"declared as a hypothesis at A{attr.row}",
                 )
             )
-            counter += 1
+
+
+def _check_period_overlap(block: Block) -> None:
+    """Repeated leading year means overlapping periods — spec §9.2 S10.
+
+    ``2026`` and ``2026 9 months`` are two records of the same year, so a column total
+    counts that year twice. The tool flags it and changes nothing: which record to use
+    is an underwriting judgment, not the tool's to make.
+    """
+    key = block.dataset.key_field
+    if block.field_types.get(key) is not FieldType.TEXT:
+        return
+
+    groups: dict[str, list[str]] = {}
+    for record in block.records:
+        label = record.values.get(key)
+        if not isinstance(label, str):
+            continue
+        match = LEADING_NUMBER.match(label)
+        if match:
+            groups.setdefault(match.group(1), []).append(label)
+
+    for year, labels in sorted(groups.items()):
+        if len(labels) > 1:
+            block.hypotheses.append(
+                Hypothesis(
+                    id="",
+                    dataset_key=block.dataset.key,
+                    attribute=f"Period overlap {year}",
+                    value=" · ".join(labels),
+                    confidence=Confidence.ASSUMED,
+                    source="tool",
+                    note=(
+                        f"{key} {year} appears {len(labels)} times as overlapping "
+                        "periods; the control sum counts each of them, so it verifies "
+                        "extraction rather than being a portfolio total"
+                    ),
+                )
+            )
+
+
+def _number_hypotheses(block: Block) -> None:
+    for n, hypothesis in enumerate(block.hypotheses, start=1):
+        hypothesis.id = f"H-{n:02d}"
 
 
 def _resolve_labels(cells: list[tuple], dataset: Dataset, where: str) -> dict[str, str]:
@@ -212,6 +256,8 @@ def extract_block(values_ws, formulas_ws, dataset: Dataset, markers, index: int,
     else:
         _select_columns(block, values_ws, formulas_ws, limit_row, limit_col, where)
 
+    _check_period_overlap(block)
+    _number_hypotheses(block)
     return block
 
 

@@ -16,9 +16,18 @@ class Step2Result:
     block: Block
     spec: Step2Spec
     records: list[Record]
-    columns: tuple[str, ...]
     computed: dict[str, list[float | None]] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+
+    @property
+    def declared_columns(self) -> tuple[str, ...]:
+        """Exactly the order sheet 00 declares — spec §9.2 S2."""
+        return tuple(self.block.dataset.headers)
+
+    @property
+    def columns(self) -> tuple[str, ...]:
+        """Declared columns, then derived ones — spec §9.2 S3."""
+        return self.declared_columns + tuple(c.name for c in self.spec.calculations)
 
     def totals(self) -> dict[str, float]:
         out = {}
@@ -29,23 +38,30 @@ class Step2Result:
         return out
 
 
-def _sort_value(value):
-    """Numbers sort numerically, then text lexically, then absences last.
+DIGITS = re.compile(r"(\d+)")
 
-    ``Year`` is typed as text (spec §8.4), so a plain string sort would be wrong the
-    moment a pack carries ``999`` beside ``2021``. Ordering on the numeric reading
-    where one exists keeps years in the order a reader expects, whatever their form.
+
+def _natural_key(value):
+    """Natural alphanumeric ordering — spec §9.2 S1.
+
+    Splits a label into runs of digits and non-digits; digit runs compare as numbers,
+    the rest as text. That keeps ``2026`` and ``2026 9 months`` adjacent — they are two
+    records of the same year, not a year and an outlier — while still ordering ``999``
+    before ``2021``, which a plain string sort would not.
     """
     if value is None:
-        return (2, 0.0, "")
-    try:
-        return (0, float(value), "")
-    except (TypeError, ValueError):
-        return (1, 0.0, str(value).casefold())
+        return ((2, 0, ""),)                       # absences last
+
+    parts = []
+    for chunk in DIGITS.split(str(value).strip()):
+        if not chunk:
+            continue
+        parts.append((0, int(chunk), "") if chunk.isdigit() else (1, 0, chunk.casefold()))
+    return tuple(parts) or ((1, 0, ""),)
 
 
 def _sort_key(record: Record, fields):
-    return [_sort_value(record.values.get(f)) for f in fields]
+    return [_natural_key(record.values.get(f)) for f in fields]
 
 
 def apply_step2(block: Block, spec: Step2Spec) -> Step2Result:
@@ -74,16 +90,17 @@ def apply_step2(block: Block, spec: Step2Spec) -> Step2Result:
 
     notes = [
         f"sorted by {', '.join(spec.sort_by)} "
-        f"{'ascending' if spec.ascending else 'descending'} (value-preserving)",
-        f"columns ordered {' | '.join(spec.column_order)} (value-preserving)",
+        f"{'ascending' if spec.ascending else 'descending'}, natural alphanumeric "
+        f"(value-preserving)",
+        f"columns ordered as declared in sheet 00: "
+        f"{' | '.join(block.dataset.headers)} (value-preserving)",
     ]
     for calc in spec.calculations:
         readable = FIELD.sub(lambda m: m.group(1), calc.expression).replace("/", " / ")
         notes.append(f"calculated {calc.name} = {readable} (value-adding)")
 
     result = Step2Result(
-        block=block, spec=spec, records=records,
-        columns=spec.output_columns(), computed=computed, notes=notes,
+        block=block, spec=spec, records=records, computed=computed, notes=notes,
     )
 
     # Sorting and reordering cannot move a total; if they do, that is a bug — spec §10 C3.

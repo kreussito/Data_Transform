@@ -230,13 +230,13 @@ class BlockWriter:
         first_data = self.row
         for n, record in enumerate(result.records):
             self._put(FIRST_COL, record.source_ref, body_f)
-            for label in result.spec.column_order:
+            for label in result.declared_columns:
                 self._put(col_of[label], record.values.get(label), body_f,
                           block.number_format(label))
             for calc in result.spec.calculations:
                 expected = result.computed[calc.name][n]
                 formula = calc.expression
-                for fld in result.spec.column_order:
+                for fld in result.declared_columns:
                     formula = formula.replace(
                         "{" + fld + "}", f"{col_letter(col_of[fld])}{self.row}"
                     )
