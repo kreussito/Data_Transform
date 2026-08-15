@@ -5,6 +5,7 @@ from __future__ import annotations
 from openpyxl.utils import column_index_from_string as col_idx
 from openpyxl.utils import get_column_letter as col_letter
 
+from .coerce import coerce
 from .markers import attributes_for, block_indices, structural
 from .model import (
     Attribute,
@@ -17,6 +18,7 @@ from .model import (
     Record,
 )
 from .nomenclature import Nomenclature, norm
+from .specs import field_types_for
 
 ERROR_CELLS = {"#REF!", "#N/A", "#VALUE!", "#DIV/0!", "#NAME?", "#NULL!", "#NUM!"}
 
@@ -50,6 +52,18 @@ def _check_cell(values_ws, formulas_ws, row: int, col: int, where: str):
                 "workbook not calculated. Open and save it in Excel, then re-run."
             )
     return v
+
+
+def _lenient(value, block: Block, label: str, ref: str):
+    """Coerce an *excluded* record, tolerating failure.
+
+    Excluded records are shown only as an independent control, so a value that cannot
+    be typed must not stop a run over records that were never extracted.
+    """
+    try:
+        return coerce(value, block.field_types[label], label, ref, [])
+    except ExtractionError:
+        return value
 
 
 def _resolve_attributes(block: Block, markers, nomenclature: Nomenclature) -> None:
@@ -189,6 +203,7 @@ def extract_block(values_ws, formulas_ws, dataset: Dataset, markers, index: int,
         header_ref=header_ref,
         info_ref=info_ref,
         address_map=address,
+        field_types=field_types_for(dataset.key, dataset.headers),
     )
     _resolve_attributes(block, markers, nomenclature)
 
@@ -205,7 +220,7 @@ def _select_rows(block: Block, values_ws, formulas_ws, limit_row, limit_col, whe
     header_row = int(block.header_ref)
     # A candidate must carry at least one measure; text in the key column (a footnote,
     # a section caption) is not a record that was excluded.
-    measure_cols = [col_idx(block.address_map[m]) for m in block.dataset.measures
+    measure_cols = [col_idx(block.address_map[m]) for m in block.numeric_fields
                     if m in block.address_map]
 
     # Records follow the extraction row; it is never itself a record — spec §6.3, §7.
@@ -226,7 +241,8 @@ def _select_rows(block: Block, values_ws, formulas_ws, limit_row, limit_col, whe
                     Record(
                         source_ref=str(row),
                         values={
-                            label: values_ws.cell(row=row, column=col_idx(col)).value
+                            label: _lenient(values_ws.cell(row=row, column=col_idx(col)).value,
+                                            block, label, f"{col}{row}")
                             for label, col in block.address_map.items()
                         },
                     )
@@ -239,10 +255,11 @@ def _select_rows(block: Block, values_ws, formulas_ws, limit_row, limit_col, whe
                 f"{where}: selector {block.info_ref}{row} reads {marker!r} but sits on row "
                 f"{row} — the sheet has been manipulated and the markers no longer align"
             )
-        values = {
-            label: _check_cell(values_ws, formulas_ws, row, col_idx(col), where)
-            for label, col in block.address_map.items()
-        }
+        values = {}
+        for label, col in block.address_map.items():
+            raw = _check_cell(values_ws, formulas_ws, row, col_idx(col), where)
+            values[label] = coerce(raw, block.field_types[label], label,
+                                   f"{col}{row}", block.coercions)
         block.records.append(Record(source_ref=str(row), values=values))
 
     extracted = {col_idx(c) for c in block.address_map.values()}
@@ -257,7 +274,7 @@ def _select_rows(block: Block, values_ws, formulas_ws, limit_row, limit_col, whe
 def _select_columns(block: Block, values_ws, formulas_ws, limit_row, limit_col, where):
     sel = int(block.info_ref)
     header_col = col_idx(block.header_ref)
-    measure_rows = [int(block.address_map[m]) for m in block.dataset.measures
+    measure_rows = [int(block.address_map[m]) for m in block.numeric_fields
                     if m in block.address_map]
 
     # Records follow the extraction column; column A is the marker channel — spec §4 M1, §6.3.
@@ -278,7 +295,8 @@ def _select_columns(block: Block, values_ws, formulas_ws, limit_row, limit_col, 
                     Record(
                         source_ref=col_letter(col),
                         values={
-                            label: values_ws.cell(row=int(row), column=col).value
+                            label: _lenient(values_ws.cell(row=int(row), column=col).value,
+                                            block, label, f"{col_letter(col)}{row}")
                             for label, row in block.address_map.items()
                         },
                     )
@@ -291,10 +309,11 @@ def _select_columns(block: Block, values_ws, formulas_ws, limit_row, limit_col, 
                 f"{where}: selector {col_letter(col)}{sel} reads {marker!r} but sits in column "
                 f"{col_letter(col)} ({col}) — the sheet has been manipulated"
             )
-        values = {
-            label: _check_cell(values_ws, formulas_ws, int(row), col, where)
-            for label, row in block.address_map.items()
-        }
+        values = {}
+        for label, row in block.address_map.items():
+            raw = _check_cell(values_ws, formulas_ws, int(row), col, where)
+            values[label] = coerce(raw, block.field_types[label], label,
+                                   f"{col_letter(col)}{row}", block.coercions)
         # Row-level confidence applies to transposed blocks only — spec §5.3, user ad 7.
         block.records.append(
             Record(source_ref=col_letter(col), values=values, confidence=block.confidence)

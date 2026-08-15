@@ -359,6 +359,47 @@ Both orientations produce an identical step-1 block, differing only in whether
 provenance reads `Source row` or `Source column`. That equivalence is the test that the
 rule set holds.
 
+### 8.4 Types
+
+Each declared field has a type, applied **at extraction**, not in step 2. Step 1 already
+carries control sums, and a sum over text silently under-counts — so typing must happen
+before anything is added up. This keeps the two steps clean: **step 1 is reading, step 2
+is business transformation.**
+
+| Field of dataset 01 | Type | Written as |
+|---|---|---|
+| `Year` | text | `@` |
+| `Premium` | number | `#,##0` |
+| `Incurred Losses` | number | `#,##0` |
+
+Types are declared **per field**, never inferred from position: on `03. Large Losses`,
+`Loss Date` and `Claim Reference` occupy the positions a measure would and must never be
+summed. Only fields typed `number` enter a control sum.
+
+They live in `datatransform/specs.py` rather than sheet 00, being stable mechanics
+rather than a fact an underwriter re-declares each year.
+
+**Two rules govern every conversion:**
+
+1. **Empty stays empty.** `None` is an absence, not a zero. Zero is a claim about the
+   data; conflating them understates a loss ratio without leaving a trace.
+2. **Ambiguity is fatal.** `"1.234"` is 1234 under a German convention and 1.234 under
+   an English one. Guessing is a 1000× error in a premium figure, so an ambiguous form
+   stops the run and says which readings were possible.
+
+Unambiguous forms are read: `"15 900"`, `"15'900"`, `"15,900.50"`, `"15.900,50"`,
+`"1.234.567"`, `"(500)"` for a negative, and a trailing currency or unit symbol.
+
+**Reporting.** A conversion is *routine* when the declared type is simply applied to a
+well-formed cell (`2021` read as `"2021"`); it is *notable* when the source was
+malformed — a number arriving as text, a date where a year was expected. Only notable
+conversions appear in the step-1 block, since a block a human must read is worth keeping
+legible; both kinds reach the debug log.
+
+**Sorting.** With `Year` typed as text, a plain string sort would misorder the moment a
+pack carries `999` beside `2021`. Step 2 sorts on the numeric reading where one exists,
+then text, then absences — so years order naturally whatever form they take.
+
 ---
 
 ## 9 · Output
@@ -510,6 +551,7 @@ datatransform/
     nomenclature.py   sheet 00: dataset register and vocabulary   (§3)
     markers.py        column A marker grammar                     (§4)
     extract.py        field resolution and record selection       (§7, §8)
+    coerce.py         type coercion                                (§8.4)
     transform.py      step 1 and step 2                           (§9.2, §10)
     specs.py          step-2 mechanics, per dataset
     writer.py         block layout, control sums, anchors         (§9, §10)
@@ -531,9 +573,10 @@ facts a human declares:
 
 | | |
 |---|---|
-| Sort | `Year` ascending — value-preserving |
+| Sort | `Year` ascending, on the numeric reading — value-preserving |
 | Column order | `Year` \| `Premium` \| `Incurred Losses` — value-preserving |
 | Calculation | `Loss Ratio % = Incurred Losses / Premium` — value-adding, written as a live formula |
+| Types | `Year` text · `Premium`, `Incurred Losses` number — see §8.4 |
 
 The value-preserving steps are checked: if sorting or reordering moves a measure total,
 the run fails rather than reporting a plausible wrong number.

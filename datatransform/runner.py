@@ -228,6 +228,15 @@ def _log_block(block: Block, result: Step2Result, debug, process):
                  ", ".join(f"{k} → {v}" for k, v in block.address_map.items()))
     process.info("  %d candidate record(s); %d extracted, %d excluded because the selector "
                  "was empty.", block.candidates, len(block.records), block.excluded)
+    process.info("  Types applied: %s.",
+                 ", ".join(f"{h} read as {block.field_types[h].value}"
+                           for h in block.dataset.headers))
+    for c in block.coercions:
+        debug.debug("%s: converted %s at %s: %r -> %r (%s)",
+                    key, c.field, c.source_ref, c.before, c.after, c.note)
+        if not c.routine:
+            process.info("  Converted %s at %s: %r → %r — %s",
+                         c.field, c.source_ref, c.before, c.after, c.note)
     if block.unextracted:
         process.info("  Contained data but was not extracted (not declared in sheet 00): %s. "
                      "Should it be?", ", ".join(block.unextracted))

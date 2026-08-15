@@ -9,7 +9,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .model import FieldType
+
 SPEC_VERSION = "1"
+
+# How each declared field is read — spec §8.4. Declared per field rather than inferred
+# from position, so that a non-numeric field sitting where a measure would (03. Large
+# Losses: Loss Date, Claim Reference) is never summed.
+FIELD_TYPES: dict[str, dict[str, FieldType]] = {
+    "01 History": {
+        "Year": FieldType.TEXT,
+        "Premium": FieldType.NUMBER,
+        "Incurred Losses": FieldType.NUMBER,
+    },
+}
+FIELD_TYPES["01 History_T"] = FIELD_TYPES["01 History"]
+
+
+def field_types_for(dataset_key: str, headers) -> dict[str, FieldType]:
+    """Declared types, defaulting to NUMBER for anything not yet specified."""
+    declared = FIELD_TYPES.get(dataset_key, {})
+    return {h: declared.get(h, FieldType.NUMBER) for h in headers}
 
 
 @dataclass(frozen=True)

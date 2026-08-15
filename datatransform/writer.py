@@ -46,12 +46,6 @@ def clear_generated(ws) -> int:
     return removed
 
 
-def _number_format(block: Block, label: str) -> str:
-    if label == block.dataset.key_field:
-        return "0"
-    return "#,##0"
-
-
 class BlockWriter:
     """Writes the two step blocks and reports the cached values its formulas need."""
 
@@ -105,6 +99,18 @@ class BlockWriter:
             f"Records: {block.candidates} candidates, {len(block.records)} extracted, "
             f"{block.excluded} excluded (selector empty)"
         )
+        self._line(
+            "Types applied: "
+            + " · ".join(f"{h} → {block.field_types[h].value}" for h in ds.headers)
+        )
+        notable = [c for c in block.coercions if not c.routine]
+        if notable:
+            shown = "; ".join(
+                f"{c.field}@{c.source_ref} {c.before!r}→{c.after!r} ({c.note})"
+                for c in notable[:6]
+            )
+            more = f" (+{len(notable) - 6} more)" if len(notable) > 6 else ""
+            self._line(f"Values that needed conversion: {shown}{more}")
         self._line(f"Confidence: {block.confidence.value} (worst of all hypotheses)")
         if block.unextracted:
             self._line(
@@ -139,7 +145,7 @@ class BlockWriter:
             self._put(FIRST_COL, record.source_ref, body_f)
             for i, label in enumerate(ds.headers, start=1):
                 self._put(FIRST_COL + i, record.values.get(label), body_f,
-                          _number_format(block, label))
+                          block.number_format(label))
             if block.orientation.value == "transposed":
                 self._put(FIRST_COL + len(ds.headers) + 1,
                           record.confidence.value if record.confidence else "", note_f)
@@ -153,24 +159,24 @@ class BlockWriter:
         self._put(FIRST_COL, f"Control  (n = {len(block.records)})", ctrl_f, fill=ctrl_fill)
         control_row = self.row
         for i, label in enumerate(headers, start=1):
-            if label == block.dataset.key_field:
+            if label not in block.numeric_fields:
                 continue
             letter = col_letter(FIRST_COL + i)
             self._formula(FIRST_COL + i, f"=SUM({letter}{first_data}:{letter}{last_data})",
-                          totals.get(label), _number_format(block, label), ctrl_f, ctrl_fill)
+                          totals.get(label), block.number_format(label), ctrl_f, ctrl_fill)
         self.row += 1
 
         self._put(FIRST_COL, "Expected (computed by tool)", note_f)
         expected_row = self.row
         for i, label in enumerate(headers, start=1):
-            if label == block.dataset.key_field:
+            if label not in block.numeric_fields:
                 continue
-            self._put(FIRST_COL + i, totals.get(label), note_f, _number_format(block, label))
+            self._put(FIRST_COL + i, totals.get(label), note_f, block.number_format(label))
         self.row += 1
 
         self._put(FIRST_COL, "Check", ctrl_f)
         for i, label in enumerate(headers, start=1):
-            if label == block.dataset.key_field:
+            if label not in block.numeric_fields:
                 continue
             letter = col_letter(FIRST_COL + i)
             self._formula(
@@ -186,13 +192,13 @@ class BlockWriter:
         totals = {
             m: sum(r.values[m] for r in block.excluded_records
                    if isinstance(r.values.get(m), (int, float)))
-            for m in block.dataset.measures
+            for m in block.numeric_fields
         }
         self._put(FIRST_COL, "Excluded records, measure totals", note_f)
         for i, label in enumerate(block.dataset.headers, start=1):
-            if label == block.dataset.key_field:
+            if label not in block.numeric_fields:
                 continue
-            self._put(FIRST_COL + i, totals.get(label), note_f, _number_format(block, label))
+            self._put(FIRST_COL + i, totals.get(label), note_f, block.number_format(label))
         self.row += 1
         self._line(
             "Shown as an independent control: an excluded total row should equal the "
@@ -226,7 +232,7 @@ class BlockWriter:
             self._put(FIRST_COL, record.source_ref, body_f)
             for label in result.spec.column_order:
                 self._put(col_of[label], record.values.get(label), body_f,
-                          _number_format(block, label))
+                          block.number_format(label))
             for calc in result.spec.calculations:
                 expected = result.computed[calc.name][n]
                 formula = calc.expression
@@ -239,20 +245,20 @@ class BlockWriter:
             self.row += 1
         last_data = self.row - 1
 
-        measures = [m for m in ds.measures]
+        measures = list(block.numeric_fields)
         self._put(FIRST_COL, f"Control  (n = {len(result.records)})", ctrl_f, fill=ctrl_fill)
         control_row = self.row
         totals = result.totals()
         for label in measures:
             letter = col_letter(col_of[label])
             self._formula(col_of[label], f"=SUM({letter}{first_data}:{letter}{last_data})",
-                          totals.get(label), _number_format(block, label), ctrl_f, ctrl_fill)
+                          totals.get(label), block.number_format(label), ctrl_f, ctrl_fill)
         self.row += 1
 
         self._put(FIRST_COL, "Tie-back to step 1 (must be unchanged)", note_f)
         for label in measures:
             self._put(col_of[label], block.totals().get(label), note_f,
-                      _number_format(block, label))
+                      block.number_format(label))
         self.row += 1
 
         self._put(FIRST_COL, "Check", ctrl_f)

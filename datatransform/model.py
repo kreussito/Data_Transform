@@ -12,6 +12,22 @@ class Orientation(str, Enum):
     TRANSPOSED = "transposed"
 
 
+class FieldType(str, Enum):
+    """How a field is read — spec §8.4.
+
+    Declared per field rather than inferred from position: on ``03. Large Losses``,
+    ``Loss Date`` and ``Claim Reference`` sit where a measure would and must never
+    be summed.
+    """
+
+    TEXT = "text"
+    NUMBER = "number"
+
+    @property
+    def number_format(self) -> str:
+        return "@" if self is FieldType.TEXT else "#,##0"
+
+
 class Confidence(str, Enum):
     """Derived from the markers, never judged — spec §5.3.
 
@@ -45,12 +61,8 @@ class Dataset:
 
     @property
     def key_field(self) -> str:
-        """The first declared header is the key; the rest are measures."""
+        """The first declared header identifies the record."""
         return self.headers[0]
-
-    @property
-    def measures(self) -> tuple[str, ...]:
-        return self.headers[1:]
 
 
 @dataclass
@@ -102,10 +114,12 @@ class Block:
     header_ref: str                 # "8" row-wise, "C" transposed
     info_ref: str                   # "L" row-wise, "16" transposed
     address_map: dict[str, str]     # label -> column letter | row number (as str)
+    field_types: dict[str, FieldType] = field(default_factory=dict)
     records: list[Record] = field(default_factory=list)
     excluded_records: list[Record] = field(default_factory=list)
     attributes: dict[str, Attribute] = field(default_factory=dict)
     hypotheses: list[Hypothesis] = field(default_factory=list)
+    coercions: list = field(default_factory=list)
     candidates: int = 0
     excluded: int = 0
     unextracted: list[str] = field(default_factory=list)
@@ -119,12 +133,23 @@ class Block:
     def provenance_label(self) -> str:
         return "Source row" if self.orientation is Orientation.ROW_WISE else "Source column"
 
+    @property
+    def numeric_fields(self) -> tuple[str, ...]:
+        """Only these are summed — spec §8.4."""
+        return tuple(
+            h for h in self.dataset.headers
+            if self.field_types.get(h) is FieldType.NUMBER
+        )
+
+    def number_format(self, label: str) -> str:
+        return self.field_types.get(label, FieldType.NUMBER).number_format
+
     def totals(self) -> dict[str, float]:
-        out = {}
-        for m in self.dataset.measures:
-            vals = [r.values.get(m) for r in self.records]
-            out[m] = sum(v for v in vals if isinstance(v, (int, float)))
-        return out
+        return {
+            m: sum(r.values[m] for r in self.records
+                   if isinstance(r.values.get(m), (int, float)))
+            for m in self.numeric_fields
+        }
 
 
 class ExtractionError(Exception):

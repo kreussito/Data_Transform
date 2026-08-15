@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 from openpyxl import load_workbook
 
+from datatransform.coerce import to_number, to_text
 from datatransform.extract import extract_sheet, last_non_empty_row
 from datatransform.markers import attributes_for, block_indices, parse_marker, read_markers
-from datatransform.model import Confidence, ExtractionError, Orientation
+from datatransform.model import Confidence, ExtractionError, FieldType, Orientation
 from datatransform.nomenclature import match_sheet, norm, read_nomenclature, sheet_sort_key
 from datatransform.runner import run
 from datatransform.specs import step2_for
@@ -21,12 +23,13 @@ SOURCE = Path(__file__).resolve().parents[1] / "Intake_v1.xlsx"
 ROW_WISE = "01. History"
 TRANSPOSED = "01. History_Transposed"
 
+# Year is read as text, measures as float — spec §8.4
 EXPECTED = [
-    (2021, 15900, 14930),
-    (2022, 16740, 10030),
-    (2023, 17520, 12660),
-    (2024, 18390, 11700),
-    (2025, 19200, 10250),
+    ("2021", 15900.0, 14930.0),
+    ("2022", 16740.0, 10030.0),
+    ("2023", 17520.0, 12660.0),
+    ("2024", 18390.0, 11700.0),
+    ("2025", 19200.0, 10250.0),
 ]
 
 
@@ -102,7 +105,6 @@ def test_nomenclature_declares_dataset_01(nomenclature):
     assert ds.key == "01 History"
     assert ds.headers == ("Year", "Premium", "Incurred Losses")
     assert ds.key_field == "Year"
-    assert ds.measures == ("Premium", "Incurred Losses")
     assert "PF transfer" in ds.attributes
 
 
@@ -145,7 +147,7 @@ def test_both_orientations_are_equivalent(books, nomenclature):
     a = _block(books, nomenclature, ROW_WISE)
     b = _block(books, nomenclature, TRANSPOSED)
     assert [r.values for r in a.records] == [r.values for r in b.records]
-    assert a.totals() == b.totals() == {"Premium": 87750, "Incurred Losses": 59570}
+    assert a.totals() == b.totals() == {"Premium": 87750.0, "Incurred Losses": 59570.0}
     assert a.provenance_label != b.provenance_label
 
 
@@ -205,7 +207,7 @@ def test_row_level_confidence_only_when_transposed(books, nomenclature):
 def test_step2_sorts_reorders_and_calculates(books, nomenclature):
     b = _block(books, nomenclature, ROW_WISE)
     result = apply_step2(b, step2_for(b.dataset.key))
-    assert [r.values["Year"] for r in result.records] == [2021, 2022, 2023, 2024, 2025]
+    assert [r.values["Year"] for r in result.records] == ["2021", "2022", "2023", "2024", "2025"]
     assert result.columns == ("Year", "Premium", "Incurred Losses", "Loss Ratio %")
     ratios = result.computed["Loss Ratio %"]
     assert ratios[0] == pytest.approx(14930 / 15900)
@@ -380,3 +382,134 @@ def test_value_outside_vocabulary_is_fatal(workspace, nomenclature):
     markers = read_markers(wb[ROW_WISE], last_non_empty_row(values[ROW_WISE]))
     with pytest.raises(ExtractionError, match="not in its vocabulary"):
         extract_sheet(values[ROW_WISE], wb[ROW_WISE], nomenclature, markers)
+
+
+# ───────────────────────────────────────────────────────── §8.4 typing
+
+def test_declared_types_are_applied(books, nomenclature):
+    b = _block(books, nomenclature, ROW_WISE)
+    assert b.field_types["Year"] is FieldType.TEXT
+    assert b.field_types["Premium"] is FieldType.NUMBER
+    assert b.field_types["Incurred Losses"] is FieldType.NUMBER
+    for r in b.records:
+        assert isinstance(r.values["Year"], str)
+        assert isinstance(r.values["Premium"], float)
+        assert isinstance(r.values["Incurred Losses"], float)
+
+
+def test_only_numeric_fields_are_summed(books, nomenclature):
+    b = _block(books, nomenclature, ROW_WISE)
+    assert b.numeric_fields == ("Premium", "Incurred Losses")
+    assert "Year" not in b.totals()
+
+
+def test_year_is_written_as_text_not_a_number(books, nomenclature):
+    b = _block(books, nomenclature, ROW_WISE)
+    assert b.number_format("Year") == "@"
+    assert b.number_format("Premium") == "#,##0"
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (2021, "2021"),
+    (2021.0, "2021"),
+    ("2021", "2021"),
+    ("  2021 ", "2021"),
+    ("2021/22", "2021/22"),
+    (datetime(2021, 12, 31), "2021"),
+    (None, None),
+    ("", None),
+])
+def test_text_coercion(raw, expected):
+    assert to_text(raw, "Year", "B9", []) == expected
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (15900, 15900.0),
+    (15900.5, 15900.5),
+    ("15900", 15900.0),
+    ("15 900", 15900.0),
+    ("15'900", 15900.0),
+    ("15,900.50", 15900.5),      # English: rightmost separator is the decimal point
+    ("15.900,50", 15900.5),      # German: likewise
+    ("1.234.567", 1234567.0),    # repeated separator can only be grouping
+    ("12.5", 12.5),              # two trailing digits is a decimal point
+    ("1.2345", 1.2345),          # four trailing digits likewise
+    ("(500)", -500.0),           # accounting negative
+    ("-500", -500.0),
+    ("15900 USD", 15900.0),
+    (None, None),
+    ("", None),
+])
+def test_number_coercion(raw, expected):
+    assert to_number(raw, "Premium", "D9", []) == expected
+
+
+@pytest.mark.parametrize("raw", ["1.234", "1,234"])
+def test_ambiguous_separator_is_fatal(raw):
+    """1.234 is 1234 in German and 1.234 in English — never guess."""
+    with pytest.raises(ExtractionError, match="ambiguous"):
+        to_number(raw, "Premium", "D9", [])
+
+
+def test_unparseable_number_is_fatal():
+    with pytest.raises(ExtractionError, match="cannot be read as a number"):
+        to_number("n/a", "Premium", "D9", [])
+
+
+def test_empty_is_missing_not_zero():
+    """Zero is a claim about the data; missing is an absence."""
+    assert to_number(None, "Premium", "D9", []) is None
+    assert to_number("   ", "Premium", "D9", []) is None
+    assert to_number(0, "Premium", "D9", []) == 0.0
+
+
+def test_coercions_are_recorded_for_reporting():
+    log = []
+    to_number("15 900", "Premium", "D9", log)
+    to_text(2021, "Year", "B9", log)
+    assert [c.field for c in log] == ["Premium", "Year"]
+    assert log[0].before == "15 900" and log[0].after == 15900.0
+
+
+def test_source_workbook_needs_no_coercion(books, nomenclature):
+    """The reference workbook is already properly typed apart from Year."""
+    b = _block(books, nomenclature, ROW_WISE)
+    assert {c.field for c in b.coercions} == {"Year"}
+
+
+def test_sort_is_numeric_aware_despite_text_years(books, nomenclature):
+    b = _block(books, nomenclature, ROW_WISE)
+    b.records[0].values["Year"] = "999"          # a plain string sort would put this last
+    result = apply_step2(b, step2_for(b.dataset.key))
+    assert [r.values["Year"] for r in result.records][0] == "999"
+
+
+def test_written_year_cell_is_text_formatted(workspace, tmp_path):
+    out = tmp_path / "out.xlsx"
+    run(workspace, out, tmp_path / "logs")
+    ws = load_workbook(out, data_only=True)[ROW_WISE]
+    year_cells = [c for row in ws.iter_rows() for c in row if c.value == "2021"]
+    assert year_cells, "the extracted year should be written as text"
+    assert all(c.number_format == "@" for c in year_cells)
+
+
+def test_routine_and_notable_coercions_are_distinguished():
+    log = []
+    to_text(2021, "Year", "B9", log)          # declared type applied to a clean cell
+    to_number("15 900", "Premium", "D9", log)  # a number that arrived as text
+    assert [c.routine for c in log] == [True, False]
+
+
+def test_text_numbers_in_source_are_read_and_reported(workspace, tmp_path, nomenclature):
+    """A premium formatted as text must still be read, and the conversion reported."""
+    from openpyxl import load_workbook as lw
+    wb = lw(workspace, data_only=False)
+    values = lw(workspace, data_only=True)
+    values[ROW_WISE]["D9"] = "15 900"
+    markers = read_markers(wb[ROW_WISE], last_non_empty_row(values[ROW_WISE]))
+    block = extract_sheet(values[ROW_WISE], wb[ROW_WISE], nomenclature, markers)[0]
+
+    assert block.records[0].values["Premium"] == 15900.0
+    notable = [c for c in block.coercions if not c.routine]
+    assert [(c.field, c.source_ref) for c in notable] == [("Premium", "D9")]
+    assert block.totals()["Premium"] == 87750.0

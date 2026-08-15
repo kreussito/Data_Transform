@@ -22,19 +22,30 @@ class Step2Result:
 
     def totals(self) -> dict[str, float]:
         out = {}
-        for m in self.block.dataset.measures:
+        for m in self.block.numeric_fields:
             out[m] = sum(
                 r.values[m] for r in self.records if isinstance(r.values.get(m), (int, float))
             )
         return out
 
 
+def _sort_value(value):
+    """Numbers sort numerically, then text lexically, then absences last.
+
+    ``Year`` is typed as text (spec §8.4), so a plain string sort would be wrong the
+    moment a pack carries ``999`` beside ``2021``. Ordering on the numeric reading
+    where one exists keeps years in the order a reader expects, whatever their form.
+    """
+    if value is None:
+        return (2, 0.0, "")
+    try:
+        return (0, float(value), "")
+    except (TypeError, ValueError):
+        return (1, 0.0, str(value).casefold())
+
+
 def _sort_key(record: Record, fields):
-    key = []
-    for f in fields:
-        v = record.values.get(f)
-        key.append((v is None, v if v is not None else 0))
-    return key
+    return [_sort_value(record.values.get(f)) for f in fields]
 
 
 def apply_step2(block: Block, spec: Step2Spec) -> Step2Result:
