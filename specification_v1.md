@@ -54,8 +54,11 @@ is written as a visible block with control sums that tie back to the step before
 | `09. Rate Development` | Rate change history | Authored, optional |
 | `10. Triangles` | Development triangles | Authored |
 | `Exchange rates` | FX rates for conversion | Authored |
-| `19. Assumptions & Queries` | Hypothesis register | **Generated** |
 | `20. Summary` | Collected step-2 blocks | **Generated** |
+
+There is no separate register sheet. Assumptions, hypotheses and control sums are
+documented **in the sheet they belong to**, beneath the original data, so a reviewer
+never has to cross-reference another tab to see how a figure was arrived at.
 
 The workbook is assembled by copying sheets in from original submission files. Expect
 external links, stale formula caches, heterogeneous layouts and imported defined names.
@@ -65,7 +68,8 @@ external links, stale formula caches, heterogeneous layouts and imported defined
 Sheet `08` carries exactly one of:
 
 - **Fire** — split by Res / Com / Ind **and** by B / C / BI
-- **Engineering** (Projects & Renewables) — split by Res / Com / Ind
+- **Engineering** (Projects & Renewables) — two split axes likewise, one of them
+  Res / Com / Ind; the second axis is not yet named
 
 The variant is declared, not sniffed. A declaration that disagrees with the sheet
 content is an interdependency failure.
@@ -200,16 +204,22 @@ never asked, which is more dangerous than a documented guess.
 **A dataset's confidence is the worst confidence of any hypothesis touching it.**
 Mechanical, conservative, and not open to averaging.
 
-### 5.4 The register — sheet `19`
+Confidence is recorded at **dataset and block level only**, with one exception: a
+**transposed** block also stamps each record, because transposition reinterprets every
+record structurally rather than merely reordering it.
 
-Entries come from three sources:
+### 5.4 Where hypotheses are documented
 
-1. `H_` markers in the sheets — generated
-2. Tool findings (missing attributes, failed interdependencies, undeclared columns) — generated
-3. Narrative judgments that are not attribute-shaped — entered by hand
+Hypotheses are written into the **step 1 block of the sheet they belong to**, listing
+id, attribute, value, confidence, status and the cell the `H_` marker was found at.
+They come from two sources:
 
-Filtering the register to `status ∈ {open, queried}`, sorted by impact, yields **the
-query list for the broker** as a by-product of extraction.
+1. `H_` markers in the sheet — the underwriter documented the assumption where they made it
+2. Tool findings — an attribute listed in sheet 00 but never declared, a column
+   containing data that nobody declared, a failed interdependency
+
+Every item at `Assumed` or `Open` is, in effect, **a question for the broker**, produced
+as a by-product of extraction rather than remembered by hand between renewals.
 
 ### 5.5 Hypotheses to anticipate
 
@@ -276,6 +286,10 @@ The extraction row is never itself a record; its selector cell stays empty.
 - Selector filled → **extract**. Selector empty → **skip**.
 - `Info_i` is a pure marker. It never appears as data, but is carried into step 1 as
   provenance.
+- **Records follow the extraction row / column.** Row-wise, candidates begin at the row
+  below `Header_i`; transposed, at the column right of it. This is not position
+  dependence — the extraction row's own location is discovered from the marker — but it
+  keeps captions above the block, and column A's marker channel, out of the record set.
 
 ### 7.1 Why `=ROW()` rather than a tick
 
@@ -453,7 +467,8 @@ that" in 2028.
 | T1 | The workbook is opened **twice** — `data_only=True` for values, `data_only=False` for formulas. One pass cannot give both |
 | T2 | Error cells (`#REF!`, `#N/A`, `#VALUE!`) inside an extraction range are **fatal**, never coerced to null or zero |
 | T3 | A pre-flight pass scans for external links, error cells and merged ranges before extraction |
-| T4 | Pivot tables and charts do not survive an `openpyxl` round-trip — **open question**, see §13 |
+| T4 | Pivot tables are **not carried into the output**. Reviewers do not need them there, and the source workbook is preserved untouched, so plain `openpyxl` is sufficient throughout |
+| T5 | A run may not write over its own source: the source is the audit baseline, and an output path equal to it is refused |
 
 T2 exists because a silently zeroed error cell reaches an underwriter under a
 clean-looking control sum.
@@ -463,24 +478,67 @@ absent source files, which resolve to stale caches or `#REF!`.
 
 ---
 
-## 13 · Open questions
+## 13 · Decisions taken, and what remains
 
-1. **Pivots in the output.** Do reviewers need pivot tables in the *written* file? If the
-   source is preserved untouched, losing them in the derived audit copy may cost nothing —
-   which would make plain `openpyxl` sufficient. If they are needed, the options are
-   `xlwings`/COM (perfect fidelity, requires Excel) or surgical OOXML editing (headless,
-   considerably more work).
-2. **Pivot source ranges.** If a pivot's source is a whole column or an auto-expanding
-   table, appended blocks will be drawn into it on refresh.
-3. **Mandatory attributes.** Does the attribute list in `00` row *n* constitute the
-   checklist of what *must* be declared, or are some attributes genuinely optional?
-4. **Sheet 08, Engineering variant.** Does it carry a second split axis analogous to
-   Fire's B/C/BI?
-5. **Datasets `02`–`10`.** Header labels and attributes not yet specified.
+Resolved:
+
+| | Decision |
+|---|---|
+| Pivots in the output | **No.** Plain `openpyxl` throughout |
+| Pivot source ranges | Not a concern, since pivots are not carried forward |
+| Mandatory attributes | **Mandatory.** The attribute list in `00` is the checklist; an undeclared attribute ranks `Open` |
+| Sheet 08, Engineering | Two split axes, as Fire has |
+| Hypothesis register | **No separate sheet.** Documented in-sheet beneath the original data |
+| Row-level confidence | Off, **except for transposed blocks** |
+
+Remaining:
+
+1. **The second Engineering split axis** on sheet `08` is not yet named.
+2. **Datasets `02`–`10`.** Header labels and attributes not yet specified. Rows 6–9 of
+   `00. NC+Interdep` hold provisional sketches, marked as such.
+3. **Step-2 mechanics beyond `01`.** Sort order, target column order and derived
+   measures are defined per dataset in `datatransform/specs.py`.
+4. **Sheet `20. Summary`.** Specified in §9.1 O6 but not yet implemented; it needs at
+   least two datasets to be meaningful.
 
 ---
 
-## 14 · Status of the reference workbook
+## 14 · Implementation
+
+```
+datatransform/
+    nomenclature.py   sheet 00: dataset register and vocabulary   (§3)
+    markers.py        column A marker grammar                     (§4)
+    extract.py        field resolution and record selection       (§7, §8)
+    transform.py      step 1 and step 2                           (§9.2, §10)
+    specs.py          step-2 mechanics, per dataset
+    writer.py         block layout, control sums, anchors         (§9, §10)
+    recalc.py         cached formula results                      (§7.2)
+    runner.py         orchestration and the two logs              (§11)
+```
+
+Run it:
+
+```bash
+python -m datatransform Intake_v1.xlsx -o output/Intake_v1_transformed.xlsx
+pytest tests/
+```
+
+### 14.1 Step 2 for dataset 01
+
+Held in `specs.py`, since sort order and derived measures are mechanics rather than
+facts a human declares:
+
+| | |
+|---|---|
+| Sort | `Year` ascending — value-preserving |
+| Column order | `Year` \| `Premium` \| `Incurred Losses` — value-preserving |
+| Calculation | `Loss Ratio % = Incurred Losses / Premium` — value-adding, written as a live formula |
+
+The value-preserving steps are checked: if sorting or reordering moves a measure total,
+the run fails rather than reporting a plausible wrong number.
+
+### 14.2 Status of the reference workbook
 
 `Intake_v1.xlsx` implements this specification for:
 
@@ -488,6 +546,9 @@ absent source files, which resolve to stale caches or `#REF!`.
 - `01. History` — row-wise, 5 records
 - `01. History_Transposed` — transposed, 5 records
 
-Both `01` sheets carry identical data and must produce identical step-1 output. The
-dataset rows for `02`–`05` in `00` are provisional sketches, marked as such, pending
-specification.
+Both `01` sheets carry identical data and are verified to produce identical output,
+differing only in whether provenance reads `Source row` or `Source column`.
+
+A note on the sandbox this was built in: LibreOffice was unavailable, so formula results
+are cached by `recalc.py` writing `<v>` alongside `<f>` directly. Where LibreOffice or
+Excel is available, either will recalculate the same values on open.
