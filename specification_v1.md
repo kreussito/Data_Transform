@@ -341,7 +341,7 @@ be lost by ignoring the source header.
 | `Premium` | D8 | column **D** |
 | `Incurred Losses` | G8 | column **G** |
 
-Records are rows 9–13. Cells read: `B`, `D`, `G` × rows 9–13 = **15 cells, and no
+Records are rows 9–14. Cells read: `B`, `D`, `G` × rows 9–14 = **18 cells, and no
 others.**
 
 ### 8.2 Worked resolution — `01. History`, transposed
@@ -352,7 +352,7 @@ others.**
 | `Premium` | C10 | row **10** |
 | `Incurred Losses` | C13 | row **13** |
 
-Records are columns D–H. Cells read: rows `8`, `10`, `13` × columns D–H = **the same 15
+Records are columns D–I. Cells read: rows `8`, `10`, `13` × columns D–I = **the same 18
 cells, rotated.**
 
 Both orientations produce an identical step-1 block, differing only in whether
@@ -492,8 +492,9 @@ summing across overlapping periods, is not — which is what the flag exists to 
 | | 11 | 2023 | 17,520 | 12,660 |
 | | 12 | 2024 | 18,390 | 11,700 |
 | | 13 | 2025 | 19,200 | 10,250 |
-| **Control** | *n = 5* | | **87,750** | **59,570** |
-| **Check vs. source total row 14** | | | 87,750 ✓ | 59,570 ✓ |
+| | 14 | 2025 9 months | 14,400 | 7,100 |
+| **Control** | *n = 6* | | **102,150** | **66,670** |
+| **Check vs. source total row 15** | | | 102,150 ✓ | 66,670 ✓ |
 
 The `Total` row deliberately excluded from extraction returns as an **independent
 control**. The sheet's own arithmetic verifies our extraction, in front of the reviewer.
@@ -541,8 +542,9 @@ failures, timings.
 **Process log** — decisions and interpretations in plain language, for a reviewer:
 
 > `01 History` / STEP 1 — header row 8, selector column L. Column `Premium` resolved to
-> D, `Incurred Losses` to G. 6 candidate rows, 5 extracted, 1 excluded (row 14, selector
+> D, `Incurred Losses` to G. 7 candidate rows, 6 extracted, 1 excluded (row 15, selector
 > empty). Currency USD, scale 1,000. Year basis assumed UW (hypothesis H-01, open).
+> 2025 appears twice, as a full year and as its first nine months (H-04, open).
 
 Every run is stamped with source-file hash, spec version, timestamp and tool version.
 With a yearly cadence, that stamp is what answers "why did the 2026 numbers look like
@@ -635,11 +637,16 @@ the run fails rather than reporting a plausible wrong number.
 `Intake_v1.xlsx` implements this specification for:
 
 - `00. NC+Interdep` — dataset register, vocabulary, marker legend
-- `01. History` — row-wise, 5 records
-- `01. History_Transposed` — transposed, 5 records
+- `01. History` — row-wise, 6 records
+- `01. History_Transposed` — transposed, 6 records
 
 Both `01` sheets carry identical data and are verified to produce identical output,
 differing only in whether provenance reads `Source row` or `Source column`.
+
+The six records are the full years 2021–2025 plus `2025 9 months`, so the reference
+workbook exercises S10: two records share the year 2025, the overlap hypothesis is
+raised, and the control sum counts that year twice — deliberately, since it verifies
+extraction and not business meaning.
 
 A note on the sandbox this was built in: LibreOffice was unavailable, so formula results
 are cached by `recalc.py` writing `<v>` alongside `<f>` directly. Where LibreOffice or

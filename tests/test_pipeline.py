@@ -23,14 +23,18 @@ SOURCE = Path(__file__).resolve().parents[1] / "Intake_v1.xlsx"
 ROW_WISE = "01. History"
 TRANSPOSED = "01. History_Transposed"
 
-# Year is read as text, measures as float — spec §8.4
+# Year is read as text, measures as float — spec §8.4.
+# 2025 appears twice: the full year and its first nine months — spec §9.2 S10.
 EXPECTED = [
     ("2021", 15900.0, 14930.0),
     ("2022", 16740.0, 10030.0),
     ("2023", 17520.0, 12660.0),
     ("2024", 18390.0, 11700.0),
     ("2025", 19200.0, 10250.0),
+    ("2025 9 months", 14400.0, 7100.0),
 ]
+TOTALS = {"Premium": 102150.0, "Incurred Losses": 66670.0}
+DISTINCT = ["2019", "2020", "2021", "2022", "2023", "2024"]
 
 
 @pytest.fixture(scope="module")
@@ -137,7 +141,7 @@ def test_transposed_resolution(books, nomenclature):
 @pytest.mark.parametrize("sheet", [ROW_WISE, TRANSPOSED])
 def test_records_and_exclusion(books, nomenclature, sheet):
     b = _block(books, nomenclature, sheet)
-    assert (b.candidates, len(b.records), b.excluded) == (6, 5, 1)
+    assert (b.candidates, len(b.records), b.excluded) == (7, 6, 1)
     got = [(r.values["Year"], r.values["Premium"], r.values["Incurred Losses"])
            for r in b.records]
     assert got == EXPECTED
@@ -147,7 +151,7 @@ def test_both_orientations_are_equivalent(books, nomenclature):
     a = _block(books, nomenclature, ROW_WISE)
     b = _block(books, nomenclature, TRANSPOSED)
     assert [r.values for r in a.records] == [r.values for r in b.records]
-    assert a.totals() == b.totals() == {"Premium": 87750.0, "Incurred Losses": 59570.0}
+    assert a.totals() == b.totals() == TOTALS
     assert a.provenance_label != b.provenance_label
 
 
@@ -166,7 +170,7 @@ def test_undeclared_columns_are_logged_not_dropped(books, nomenclature):
 
 def test_only_declared_addresses_are_read(books, nomenclature):
     b = _block(books, nomenclature, ROW_WISE)
-    assert len(b.records) * len(b.dataset.headers) == 15
+    assert len(b.records) * len(b.dataset.headers) == 18
     assert all(set(r.values) == set(b.dataset.headers) for r in b.records)
 
 
@@ -174,7 +178,9 @@ def test_only_declared_addresses_are_read(books, nomenclature):
 
 def test_confidence_is_derived_and_worst_wins(books, nomenclature):
     b = _block(books, nomenclature, ROW_WISE)
-    assert {h.attribute for h in b.hypotheses} == {"Year basis", "Loss basis", "PF transfer"}
+    assert {h.attribute for h in b.hypotheses} == {
+        "Year basis", "Loss basis", "PF transfer", "Period overlap 2025",
+    }
     assert all(h.confidence is Confidence.ASSUMED for h in b.hypotheses)
     assert b.confidence is Confidence.ASSUMED
 
@@ -207,11 +213,14 @@ def test_row_level_confidence_only_when_transposed(books, nomenclature):
 def test_step2_sorts_reorders_and_calculates(books, nomenclature):
     b = _block(books, nomenclature, ROW_WISE)
     result = apply_step2(b, step2_for(b.dataset.key))
-    assert [r.values["Year"] for r in result.records] == ["2021", "2022", "2023", "2024", "2025"]
+    assert [r.values["Year"] for r in result.records] == [
+        "2021", "2022", "2023", "2024", "2025", "2025 9 months",
+    ]
     assert result.columns == ("Year", "Premium", "Incurred Losses", "Loss Ratio %")
     ratios = result.computed["Loss Ratio %"]
     assert ratios[0] == pytest.approx(14930 / 15900)
-    assert ratios[-1] == pytest.approx(10250 / 19200)
+    assert ratios[-2] == pytest.approx(10250 / 19200)     # 2025 full year
+    assert ratios[-1] == pytest.approx(7100 / 14400)      # 2025 first nine months
 
 
 def test_step2_is_value_preserving(books, nomenclature):
@@ -512,7 +521,7 @@ def test_text_numbers_in_source_are_read_and_reported(workspace, tmp_path, nomen
     assert block.records[0].values["Premium"] == 15900.0
     notable = [c for c in block.coercions if not c.routine]
     assert [(c.field, c.source_ref) for c in notable] == [("Premium", "D9")]
-    assert block.totals()["Premium"] == 87750.0
+    assert block.totals()["Premium"] == TOTALS["Premium"]
 
 
 # ──────────────────────────────────────────── §9.2 S1, S2, S10 step-2 rules
@@ -526,29 +535,29 @@ def _relabel(block, labels):
 
 def test_S1_natural_sort_keeps_same_year_variants_adjacent(books, nomenclature):
     b = _block(books, nomenclature, ROW_WISE)
-    _relabel(b, ["2026 9 months", "2024", "2026", "2025", "2026 6 months"])
+    _relabel(b, ["2026 9 months", "2024", "2026", "2025", "2026 6 months", "2023"])
     result = apply_step2(b, step2_for(b.dataset.key))
     assert [r.values["Year"] for r in result.records] == [
-        "2024", "2025", "2026", "2026 6 months", "2026 9 months",
+        "2023", "2024", "2025", "2026", "2026 6 months", "2026 9 months",
     ]
 
 
 def test_S1_natural_sort_orders_numerically_not_lexically(books, nomenclature):
     b = _block(books, nomenclature, ROW_WISE)
-    _relabel(b, ["2021", "999", "2020", "10000", "2022"])
+    _relabel(b, ["2021", "999", "2020", "10000", "2022", "37"])
     result = apply_step2(b, step2_for(b.dataset.key))
     assert [r.values["Year"] for r in result.records] == [
-        "999", "2020", "2021", "2022", "10000",
+        "37", "999", "2020", "2021", "2022", "10000",
     ]
 
 
 def test_S1_labels_are_never_rewritten(books, nomenclature):
     """The label is the identity — it must survive verbatim."""
     b = _block(books, nomenclature, ROW_WISE)
-    _relabel(b, ["2026 9 months", "2024", "2025", "2026", "2023"])
+    _relabel(b, ["2026 9 months", "2024", "2025", "2026", "2023", "2022"])
     result = apply_step2(b, step2_for(b.dataset.key))
     assert "2026 9 months" in [r.values["Year"] for r in result.records]
-    assert len(result.records) == 5, "records must not be merged by numeric year"
+    assert len(result.records) == 6, "records must not be merged by numeric year"
 
 
 def test_S2_column_order_comes_from_sheet_00(books, nomenclature):
@@ -567,7 +576,7 @@ def test_S10_overlapping_periods_raise_a_hypothesis(books, nomenclature):
     from datatransform.extract import _check_period_overlap, _number_hypotheses
 
     b = _block(books, nomenclature, ROW_WISE)
-    _relabel(b, ["2024", "2025", "2026", "2026 9 months", "2027"])
+    _relabel(b, ["2024", "2025", "2026", "2026 9 months", "2027", "2028"])
     b.hypotheses.clear()
     _check_period_overlap(b)
     _number_hypotheses(b)
@@ -585,6 +594,7 @@ def test_S10_silent_when_every_period_is_distinct(books, nomenclature):
     from datatransform.extract import _check_period_overlap
 
     b = _block(books, nomenclature, ROW_WISE)
+    _relabel(b, DISTINCT)
     b.hypotheses.clear()
     _check_period_overlap(b)
     assert b.hypotheses == []
@@ -594,7 +604,7 @@ def test_S10_flags_but_does_not_change_the_data(books, nomenclature):
     from datatransform.extract import _check_period_overlap
 
     b = _block(books, nomenclature, ROW_WISE)
-    _relabel(b, ["2024", "2025", "2026", "2026 9 months", "2027"])
+    _relabel(b, ["2024", "2025", "2026", "2026 9 months", "2027", "2028"])
     before = [dict(r.values) for r in b.records]
     totals = b.totals()
     _check_period_overlap(b)
@@ -603,19 +613,7 @@ def test_S10_flags_but_does_not_change_the_data(books, nomenclature):
 
 
 def test_S10_reaches_the_written_block(workspace, tmp_path):
-    """A pack carrying both a full year and a partial period surfaces the flag."""
-    from openpyxl import load_workbook as lw
-
-    from datatransform.recalc import inject
-
-    wb = lw(workspace)
-    ws = wb[ROW_WISE]
-    ws["B13"] = "2025 9 months"      # last record now overlaps 2025 in row 12
-    ws["B12"] = "2025"
-    wb.save(workspace)
-    # openpyxl strips cached formula results on save; restore them as Excel would
-    inject(workspace)
-
+    """The reference workbook carries both a full year and a partial period."""
     out = tmp_path / "out.xlsx"
     report = run(workspace, out, tmp_path / "logs")
     assert report.ok
