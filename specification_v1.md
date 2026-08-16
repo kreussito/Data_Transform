@@ -6,7 +6,7 @@ Excel, driven by metadata declared in the workbook itself.
 | | |
 |---|---|
 | **Version** | 1 |
-| **Status** | Design agreed for `00` and `01`; sheets `02`–`10` not yet specified |
+| **Status** | `00`, `01` and `02` implemented; sheets `03`–`10` not yet specified |
 | **Cadence** | Once per treaty, per year |
 | **Reference workbook** | `Intake_v1.xlsx` |
 
@@ -124,7 +124,48 @@ prevent.
 `Year` is deliberately unqualified. Whether it means underwriting or occurrence year is
 an **attribute**, not part of the field name — see §5.
 
-### 3.3 Vocabulary block
+### 3.3 The other blocks of sheet 00
+
+Sheet 00 is the **frame**: what each sheet holds, what the names mean, and what must
+tie. Beneath the dataset register it carries four more blocks, each found by its
+anchor rather than by position.
+
+#### `⟦GLOBAL⟧` — workbook-wide facts
+
+| Attribute | Value |
+|---|---|
+| `Actual year` | `2025` |
+| `Cedent` | Example Insurance SA |
+| `Treaty` | Property per Risk XL |
+
+`Actual year` is **N**, the expiring year; the renewal being underwritten is **N+1**.
+Every `{N}` reference in `⟦RULES⟧` and in the step-2 figures resolves from it.
+
+Attributes now resolve in **three tiers**, each overriding the one above:
+
+| Tier | Where | Scope |
+|---|---|---|
+| Global | `⟦GLOBAL⟧` | the whole workbook |
+| Sheet | column A, unsuffixed | one sheet |
+| Block | column A, `_i` suffix | one block |
+
+#### `⟦TYPES⟧` — field name → datatype
+
+| Field | Type |
+|---|---|
+| `Year` | text |
+| `Premium` · `Incurred Losses` · `EPI` · `Number of Risks` · `Sum Insured` | number |
+| `Band` · `Claim Reference` · `Event Name` · `Loss Date` · `Event Date` | text |
+
+**A field name carries one type across the whole workbook** — which is precisely what a
+nomenclature is for. A declared field with no entry here is an error; nothing is
+defaulted, because defaulting `Claim Reference` to a number would be silent and wrong.
+
+#### `⟦RULES⟧` — crosschecks and interdependencies
+
+See §10.1.
+
+### 3.4 Vocabulary block
 
 A `⟦VOCABULARY⟧` block lower in the sheet lists the permitted values per attribute. An
 attribute value outside its vocabulary is an error, so that a typo becomes a failure
@@ -376,8 +417,8 @@ Types are declared **per field**, never inferred from position: on `03. Large Lo
 `Loss Date` and `Claim Reference` occupy the positions a measure would and must never be
 summed. Only fields typed `number` enter a control sum.
 
-They live in `datatransform/specs.py` rather than sheet 00, being stable mechanics
-rather than a fact an underwriter re-declares each year.
+They are declared in **`⟦TYPES⟧` of sheet 00**, by field name, so the frame states both
+what a field is called and how it is read.
 
 **Two rules govern every conversion:**
 
@@ -449,6 +490,24 @@ sums tying back to step 1.
 | **S8** | Confidence carried forward from step 1 | — |
 | **S9** | Every rule applied is written into the block in plain language | — |
 | **S10** | Key labels preserved verbatim — never parsed, merged or de-duplicated. A repeated leading number raises an overlap hypothesis | — |
+| **S11** | **Step 1 carries only extracted information.** Every computed figure belongs to step 2 | — |
+| **S12** | Figures relating *two records* are written as **block-level derived figures** beneath the data, not as columns | value-adding |
+
+**S11.** A reviewer must be able to compare step 1 against the source cell by cell with
+nothing interposed. Step 1's control sums are not an exception: they *verify the
+extraction* rather than deriving a business measure, and they are what makes the
+cell-by-cell comparison checkable.
+
+**S12.** `Loss Ratio %` describes one record, so it is a column. `Estimation error` and
+`Implied growth` each relate two records, so they have no per-row meaning:
+
+```
+Derived figures
+  Estimation error   2025 re-est 19,200 ÷ 2025 est 18,500 − 1   =  +3.8%
+  Implied growth     2026 20,900 ÷ 2025 re-est 19,200 − 1       =  +8.9%
+```
+
+Where a record is missing, the figure reports *why* rather than being omitted.
 
 **S1 — natural sort.** Each label splits into runs of digits and non-digits; digit runs
 compare as numbers, the rest as text. This keeps same-year variants adjacent *and*
@@ -520,15 +579,53 @@ require an explained delta.
 
 ### 10.1 Interdependencies
 
-Cross-sheet reconciliation, each with an explicit tolerance because figures rounded to
-thousands will never satisfy exact equality:
+Declared in `⟦RULES⟧` of sheet 00, in condensed form:
 
-| Rule | Left | Right | Relation | Severity |
-|---|---|---|---|---|
-| R-01 | Σ `03` Large Losses, year *y* | `01` Incurred Losses, year *y* | ≤ | error |
-| R-02 | Σ `04` Cat Losses, year *y* | `01` Incurred Losses, year *y* | ≤ | error |
-| R-03 | `10` Triangles latest diagonal, year *y* | `01` Incurred Losses, year *y* | = | error |
-| R-04 | `02` EPI first projected year | `01` Premium trend | plausibility | warning |
+```
+<dataset key>.<field>@<record>   <rel>   <dataset key>.<field>@<record>
+```
+
+| ID | Left | Rel | Right | Tol | Severity |
+|---|---|---|---|---|---|
+| R-05 | `01 History.Premium@{N} 9 months` | `=` | `02 EPI.EPI@{N} 9 months` | 1 | error |
+| R-06 | `01 History.Premium@{N}` | `=` | `02 EPI.EPI@{N} re-est` | 1 | error |
+| R-07 | `02 EPI.EPI@{N} re-est` | `>=` | `02 EPI.EPI@{N} 9 months` | 0 | error |
+
+R-05 is the strongest tie: the same nine months of the same year, reported in two
+sheets. R-06 catches an estimate masquerading as an actual — a full-year figure for N in
+`History` cannot be an actual, because N is not over. R-07 is arithmetic: premium
+accrues, so a re-estimate cannot fall below what is already booked.
+
+Every tolerance is explicit, because figures rounded to thousands never satisfy exact
+equality and a check that always fails gets ignored.
+
+**Records resolve by leading number, then suffix.** `{N+1}` matches a lone record for
+that year whatever its own suffix, so both `2026` and `2026 est` work; where several
+records share a year, the suffix must match exactly. No label is ever rewritten.
+
+#### Attribute compatibility is a precondition, not part of the comparison
+
+Before any rule is evaluated, `Premium basis`, `Loss basis` and `Currency` must agree on
+both sides. `Scale` is normalised — the comparison happens in the left block's scale.
+
+Where a basis or currency differs, **the rule is not evaluated**. It is reported as
+*skipped*, with the reason, and raises a question. Quietly comparing GWP against GNPI
+would be worse than not checking at all.
+
+A rule that fails or is skipped becomes a hypothesis in the step-1 block of **both**
+sheets it names, so a reviewer reading either one sees the tie.
+
+#### Still to be declared
+
+| Rule | Left | Right | Relation |
+|---|---|---|---|
+| R-01 | Σ `03` Large Losses, year *y* | `01` Incurred Losses, year *y* | ≤ |
+| R-02 | Σ `04` Cat Losses, year *y* | `01` Incurred Losses, year *y* | ≤ |
+| R-03 | `10` Triangles latest diagonal, year *y* | `01` Incurred Losses, year *y* | = |
+| R-08 | `02` EPI `{N} est` | last year's pack, same label | = |
+
+R-01 to R-03 need aggregation across records, which `⟦RULES⟧` does not yet express.
+R-08 needs a stored prior run.
 
 ---
 
@@ -603,11 +700,16 @@ datatransform/
     markers.py        column A marker grammar                     (§4)
     extract.py        field resolution and record selection       (§7, §8)
     coerce.py         type coercion                                (§8.4)
+    crosschecks.py    interdependencies between sheets             (§10.1)
     transform.py      step 1 and step 2                           (§9.2, §10)
     specs.py          step-2 mechanics, per dataset
     writer.py         block layout, control sums, anchors         (§9, §10)
     recalc.py         cached formula results                      (§7.2)
     runner.py         orchestration and the two logs              (§11)
+```
+
+```
+tools/build_intake.py   regenerates the reference workbook
 ```
 
 Run it:
@@ -617,7 +719,10 @@ python -m datatransform Intake_v1.xlsx -o output/Intake_v1_transformed.xlsx
 pytest tests/
 ```
 
-### 14.1 Step 2 for dataset 01
+The pipeline makes **two passes**: every sheet is extracted first, so `⟦RULES⟧` has both
+sides of each crosscheck available, and only then is anything transformed and written.
+
+### 14.1 Step 2 for datasets 01 and 02
 
 Held in `specs.py`, since sort order and derived measures are mechanics rather than
 facts a human declares:
@@ -639,6 +744,7 @@ the run fails rather than reporting a plausible wrong number.
 - `00. NC+Interdep` — dataset register, vocabulary, marker legend
 - `01. History` — row-wise, 6 records
 - `01. History_Transposed` — transposed, 6 records
+- `02. EPI Projections` — row-wise, 4 records: `N est`, `N 9 months`, `N re-est`, `N+1`
 
 Both `01` sheets carry identical data and are verified to produce identical output,
 differing only in whether provenance reads `Source row` or `Source column`.

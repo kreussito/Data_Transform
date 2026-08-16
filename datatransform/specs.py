@@ -9,27 +9,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .model import FieldType
-
 SPEC_VERSION = "1"
 
-# How each declared field is read — spec §8.4. Declared per field rather than inferred
-# from position, so that a non-numeric field sitting where a measure would (03. Large
-# Losses: Loss Date, Claim Reference) is never summed.
-FIELD_TYPES: dict[str, dict[str, FieldType]] = {
-    "01 History": {
-        "Year": FieldType.TEXT,
-        "Premium": FieldType.NUMBER,
-        "Incurred Losses": FieldType.NUMBER,
-    },
-}
-FIELD_TYPES["01 History_T"] = FIELD_TYPES["01 History"]
-
-
-def field_types_for(dataset_key: str, headers) -> dict[str, FieldType]:
-    """Declared types, defaulting to NUMBER for anything not yet specified."""
-    declared = FIELD_TYPES.get(dataset_key, {})
-    return {h: declared.get(h, FieldType.NUMBER) for h in headers}
+# Field datatypes are declared in ⟦TYPES⟧ of sheet 00, not here: a field name carries
+# one meaning across the workbook, which is what a nomenclature is for (spec §8.4).
 
 
 @dataclass(frozen=True)
@@ -40,6 +23,22 @@ class Calculation:
     expression: str
     number_format: str = "0.0%"
     guard_zero: str | None = None      # field that must not be zero
+
+
+@dataclass(frozen=True)
+class DerivedFigure:
+    """A step-2 figure relating two *records* rather than describing one — spec §9.2.1.
+
+    Written beneath the data, not as a column, because it has no per-row meaning.
+    """
+
+    name: str
+    numerator: str            # record pattern, e.g. "{N} re-est"
+    denominator: str          # record pattern, e.g. "{N} est"
+    field: str
+    kind: str = "ratio_minus_1"
+    number_format: str = "0.0%"
+    note: str = ""
 
 
 @dataclass(frozen=True)
@@ -54,6 +53,7 @@ class Step2Spec:
     sort_by: tuple[str, ...]
     ascending: bool = True
     calculations: tuple[Calculation, ...] = field(default_factory=tuple)
+    figures: tuple[DerivedFigure, ...] = field(default_factory=tuple)
 
 
 STEP2: dict[str, Step2Spec] = {
@@ -66,6 +66,27 @@ STEP2: dict[str, Step2Spec] = {
                 expression="{Incurred Losses}/{Premium}",
                 number_format="0.0%",
                 guard_zero="Premium",
+            ),
+        ),
+    ),
+    "02 EPI": Step2Spec(
+        sort_by=("Year",),
+        ascending=True,
+        figures=(
+            DerivedFigure(
+                name="Estimation error",
+                numerator="{N} re-est",
+                denominator="{N} est",
+                field="EPI",
+                note="how far the cedent's own projection for N has moved; "
+                     "the measure of how much to trust N+1",
+            ),
+            DerivedFigure(
+                name="Implied growth",
+                numerator="{N+1}",
+                denominator="{N} re-est",
+                field="EPI",
+                note="cross-check against rate development and exposure growth",
             ),
         ),
     ),

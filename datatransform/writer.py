@@ -276,6 +276,41 @@ class BlockWriter:
                 f"{', '.join(calc_names)} is value-adding, so no tie-back applies; "
                 "it is written as a live formula over the columns above."
             )
+        self._write_figures(result)
+        self._write_crosschecks(result.block)
+
+    def _write_figures(self, result: Step2Result) -> None:
+        """Block-level derived figures — spec §9.2.1."""
+        if not result.figures:
+            return
+        self.row += 1
+        self._put(FIRST_COL, "Derived figures", head_f, fill=step2_fill)
+        self.row += 1
+        for figure in result.figures:
+            self._put(FIRST_COL, figure.name, ctrl_f)
+            if figure.value is None:
+                self._put(FIRST_COL + 1, "not computed", note_f)
+            else:
+                self._put(FIRST_COL + 1, figure.value, ctrl_f, figure.number_format)
+            self._put(FIRST_COL + 2, figure.detail, note_f)
+            self._put(FIRST_COL + 4, figure.note, note_f)
+            self.row += 1
+
+    def _write_crosschecks(self, block: Block) -> None:
+        """Interdependencies this sheet takes part in — spec §10.1."""
+        if not block.crosschecks:
+            return
+        self.row += 1
+        self._put(FIRST_COL, "Crosschecks against other sheets", head_f, fill=step2_fill)
+        self.row += 1
+        for result in block.crosschecks:
+            self._put(FIRST_COL, result.rule.id, ctrl_f)
+            self._put(FIRST_COL + 1, result.status.upper(),
+                      ctrl_f, fill=None if result.status == "passed" else ctrl_fill)
+            self._put(FIRST_COL + 2,
+                      f"{result.rule.left} {result.rule.relation} {result.rule.right}", note_f)
+            self._put(FIRST_COL + 5, result.detail, note_f)
+            self.row += 1
 
 
 def write_blocks(ws, block: Block, result: Step2Result) -> list[tuple[str, str, float]]:

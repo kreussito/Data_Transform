@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from .model import Dataset, ExtractionError
+from .model import Dataset, ExtractionError, FieldType, Rule
 
 HEADER_COL_FIRST = 4     # D
 HEADER_COL_LAST = 13     # M
@@ -14,7 +14,10 @@ ATTR_COL_LAST = 40
 SECTION_ROW = 4
 FIRST_DATASET_ROW = 5
 
+GLOBAL_ANCHOR = "⟦GLOBAL⟧"
+TYPES_ANCHOR = "⟦TYPES⟧"
 VOCAB_ANCHOR = "⟦VOCABULARY⟧"
+RULES_ANCHOR = "⟦RULES⟧"
 
 
 def norm(value) -> str:
@@ -66,12 +69,64 @@ def _distance(a: str, b: str) -> int:
     return prev[-1]
 
 
-class Nomenclature:
-    """The dataset register and attribute vocabulary of sheet 00."""
+def _find_anchor(ws, anchor: str) -> int | None:
+    for row in range(1, ws.max_row + 1):
+        if norm(ws.cell(row=row, column=2).value) == anchor:
+            return row
+    return None
 
-    def __init__(self, datasets: dict[str, Dataset], vocabulary: dict[str, list[str]]):
+
+def _read_block(ws, anchor: str, columns: int, skip_label_row: bool = True):
+    """Rows of an ⟦ANCHOR⟧ block, stopping at a blank row or the next anchor."""
+    start = _find_anchor(ws, anchor)
+    if start is None:
+        return []
+
+    rows = []
+    for row in range(start + (2 if skip_label_row else 1), ws.max_row + 1):
+        values = [norm(ws.cell(row=row, column=2 + i).value) for i in range(columns)]
+        if not values[0]:
+            break
+        if values[0].startswith("⟦"):
+            break
+        rows.append((row, values))
+    return rows
+
+
+class Nomenclature:
+    """Sheet 00: the frame — datasets, globals, types, vocabulary and rules."""
+
+    def __init__(self, datasets, vocabulary, globals_=None, types=None, rules=None):
         self.datasets = datasets
         self.vocabulary = vocabulary
+        self.globals = globals_ or {}
+        self.types = types or {}
+        self.rules = rules or []
+
+    @property
+    def actual_year(self) -> int | None:
+        """N — the expiring year. The renewal being underwritten is N+1."""
+        raw = self.globals.get("Actual year")
+        if raw is None:
+            return None
+        try:
+            return int(float(str(raw).replace(",", "")))
+        except ValueError:
+            raise ExtractionError(
+                f"sheet 00 ⟦GLOBAL⟧: 'Actual year' is {raw!r}, which is not a year"
+            ) from None
+
+    def type_of(self, field: str) -> FieldType:
+        declared = self.types.get(norm(field).casefold())
+        if declared is None:
+            raise ExtractionError(
+                f"field {field!r} has no datatype in sheet 00 ⟦TYPES⟧ — "
+                "every declared field needs one"
+            )
+        return declared
+
+    def field_types(self, headers) -> dict[str, FieldType]:
+        return {h: self.type_of(h) for h in headers}
 
     @classmethod
     def read(cls, ws) -> "Nomenclature":
@@ -79,6 +134,8 @@ class Nomenclature:
         for row in range(FIRST_DATASET_ROW, ws.max_row + 1):
             sheet_name = norm(ws.cell(row=row, column=2).value)
             key = norm(ws.cell(row=row, column=3).value)
+            if sheet_name.startswith("⟦"):
+                break                       # the register ends where the next block begins
             if not sheet_name or not key:
                 continue
             headers = tuple(
@@ -97,30 +154,49 @@ class Nomenclature:
                 continue
             datasets[sheet_name] = Dataset(sheet_name, key, headers, attributes)
 
-        return cls(datasets, cls._read_vocabulary(ws))
+        return cls(
+            datasets,
+            cls._read_vocabulary(ws),
+            cls._read_globals(ws),
+            cls._read_types(ws),
+            cls._read_rules(ws),
+        )
+
+    @staticmethod
+    def _read_globals(ws) -> dict[str, str]:
+        return {name: value for _, (name, value) in _read_block(ws, GLOBAL_ANCHOR, 2)}
+
+    @staticmethod
+    def _read_types(ws) -> dict[str, FieldType]:
+        return {
+            name.casefold(): FieldType.parse(kind)
+            for _, (name, kind) in _read_block(ws, TYPES_ANCHOR, 2)
+        }
+
+    @staticmethod
+    def _read_rules(ws) -> list[Rule]:
+        rules = []
+        for row, values in _read_block(ws, RULES_ANCHOR, 7):
+            rid, left, rel, right, tol, sev, note = values
+            if not (left and rel and right):
+                raise ExtractionError(
+                    f"sheet 00 ⟦RULES⟧ row {row}: incomplete rule {rid!r}"
+                )
+            try:
+                tolerance = float(str(tol).replace(",", "")) if tol else 0.0
+            except ValueError:
+                raise ExtractionError(
+                    f"sheet 00 ⟦RULES⟧ row {row}: tolerance {tol!r} is not a number"
+                ) from None
+            rules.append(Rule(rid, left, rel, right, tolerance, sev or "error", note))
+        return rules
 
     @staticmethod
     def _read_vocabulary(ws) -> dict[str, list[str]]:
-        anchor = None
-        for row in range(1, ws.max_row + 1):
-            if norm(ws.cell(row=row, column=2).value) == VOCAB_ANCHOR:
-                anchor = row
-                break
-        if anchor is None:
-            return {}
-
-        vocab: dict[str, list[str]] = {}
-        for row in range(anchor + 2, ws.max_row + 1):     # skip the column-label row
-            name = norm(ws.cell(row=row, column=2).value)
-            values = norm(ws.cell(row=row, column=3).value)
-            if not name:
-                if vocab:
-                    break
-                continue
-            if name.startswith("⟦"):
-                break
-            vocab[name] = [v.strip() for v in values.split("|") if v.strip()]
-        return vocab
+        return {
+            name: [v.strip() for v in values.split("|") if v.strip()]
+            for _, (name, values) in _read_block(ws, VOCAB_ANCHOR, 2)
+        }
 
     def dataset_for(self, sheet_name: str) -> Dataset | None:
         target = match_sheet(sheet_name, list(self.datasets))

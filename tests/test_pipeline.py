@@ -10,9 +10,21 @@ import pytest
 from openpyxl import load_workbook
 
 from datatransform.coerce import to_number, to_text
+from datatransform.crosschecks import (
+    hypotheses_from,
+    match_record,
+    run_rules,
+    split_label,
+)
 from datatransform.extract import extract_sheet, last_non_empty_row
 from datatransform.markers import attributes_for, block_indices, parse_marker, read_markers
-from datatransform.model import Confidence, ExtractionError, FieldType, Orientation
+from datatransform.model import (
+    Confidence,
+    ExtractionError,
+    FieldType,
+    Orientation,
+    Rule,
+)
 from datatransform.nomenclature import match_sheet, norm, read_nomenclature, sheet_sort_key
 from datatransform.runner import run
 from datatransform.specs import step2_for
@@ -622,3 +634,210 @@ def test_S10_reaches_the_written_block(workspace, tmp_path):
     text = [c.value for row in ws.iter_rows() for c in row if isinstance(c.value, str)]
     assert any("Period overlap 2025" in t for t in text)
     assert "2025 9 months" in text, "the label must reach the output verbatim"
+
+
+# ════════════════════════════════════════ sheet 02 · globals · types · rules
+
+EPI = "02. EPI Projections"
+EPI_EXPECTED = [("2025 est", 18500.0), ("2025 9 months", 14400.0),
+                ("2025 re-est", 19200.0), ("2026", 20900.0)]
+
+
+def test_global_block_declares_N(nomenclature):
+    assert nomenclature.actual_year == 2025
+    assert nomenclature.globals["Cedent"] == "Example Insurance SA"
+
+
+def test_types_come_from_sheet_00(nomenclature):
+    assert nomenclature.type_of("Year") is FieldType.TEXT
+    assert nomenclature.type_of("EPI") is FieldType.NUMBER
+    assert nomenclature.type_of("Claim Reference") is FieldType.TEXT
+
+
+def test_undeclared_type_is_fatal(nomenclature):
+    with pytest.raises(ExtractionError, match="no datatype"):
+        nomenclature.type_of("Something Undeclared")
+
+
+def test_dataset_register_stops_at_the_next_block(nomenclature):
+    """⟦RULES⟧ rows must not be read as datasets."""
+    assert set(nomenclature.datasets) == {
+        "01. History", "02. EPI Projections", "03. Large Losses",
+        "04. Cat Losses", "05. Risk Profiles", "01. History_Transposed",
+    }
+
+
+def test_rules_are_read_from_sheet_00(nomenclature):
+    ids = [r.id for r in nomenclature.rules]
+    assert ids == ["R-05", "R-06", "R-07"]
+    r5 = nomenclature.rules[0]
+    assert Rule.parse_ref(r5.left) == ("01 History", "Premium", "{N} 9 months")
+    assert r5.relation == "=" and r5.tolerance == 1.0 and r5.severity == "error"
+
+
+def test_epi_extraction(books, nomenclature):
+    b = _block(books, nomenclature, EPI)
+    assert b.address_map == {"Year": "B", "EPI": "C"}
+    assert b.info_ref == "K"                       # a different selector column from 01
+    assert (b.candidates, len(b.records), b.excluded) == (5, 4, 1)
+    assert [(r.values["Year"], r.values["EPI"]) for r in b.records] == EPI_EXPECTED
+    assert b.unextracted == ["D", "E"]             # Share % and Comment, not declared
+
+
+def test_epi_overlap_flags_three_views_of_one_year(books, nomenclature):
+    b = _block(books, nomenclature, EPI)
+    overlap = [h for h in b.hypotheses if h.attribute == "Period overlap 2025"]
+    assert len(overlap) == 1
+    assert overlap[0].value == "2025 est · 2025 9 months · 2025 re-est"
+
+
+# ───────────────────────────────────────────────── record matching
+
+@pytest.mark.parametrize("pattern,expected", [
+    ("{N} est", "2025 est"),
+    ("{N} 9 months", "2025 9 months"),
+    ("{N} re-est", "2025 re-est"),
+    ("{N+1}", "2026"),
+])
+def test_records_match_on_leading_number_then_suffix(books, nomenclature, pattern, expected):
+    b = _block(books, nomenclature, EPI)
+    record = match_record(b, pattern, nomenclature.actual_year)
+    assert record is not None and record.values["Year"] == expected
+
+
+def test_bare_pattern_matches_a_lone_record_whatever_its_suffix(books, nomenclature):
+    """{N+1} resolves whether the sheet writes 2026 or 2026 est."""
+    b = _block(books, nomenclature, EPI)
+    b.records[-1].values["Year"] = "2026 est"
+    assert match_record(b, "{N+1}", 2025).values["Year"] == "2026 est"
+
+
+def test_ambiguous_bare_pattern_matches_nothing(books, nomenclature):
+    """Where several records share the year, the suffix must be exact."""
+    b = _block(books, nomenclature, EPI)
+    assert match_record(b, "{N}", 2025) is None      # est, 9 months and re-est all exist
+
+
+def test_split_label():
+    assert split_label("2025 9 months") == (2025, "9 months")
+    assert split_label("2026") == (2026, "")
+    assert split_label("Total") == (None, "Total")
+
+
+# ───────────────────────────────────────────────── derived figures
+
+def test_derived_figures_are_block_level(books, nomenclature):
+    b = _block(books, nomenclature, EPI)
+    result = apply_step2(b, step2_for(b.dataset.key), nomenclature.actual_year)
+    figures = {f.name: f.value for f in result.figures}
+    assert figures["Estimation error"] == pytest.approx(19200 / 18500 - 1)
+    assert figures["Implied growth"] == pytest.approx(20900 / 19200 - 1)
+
+
+def test_derived_figures_report_rather_than_guess(books, nomenclature):
+    b = _block(books, nomenclature, EPI)
+    b.records = [r for r in b.records if r.values["Year"] != "2025 est"]
+    result = apply_step2(b, step2_for(b.dataset.key), nomenclature.actual_year)
+    estimation = next(f for f in result.figures if f.name == "Estimation error")
+    assert estimation.value is None
+    assert "no record matching" in estimation.detail
+
+
+def test_figures_need_N(books, nomenclature):
+    b = _block(books, nomenclature, EPI)
+    result = apply_step2(b, step2_for(b.dataset.key), actual_year=None)
+    assert all(f.value is None for f in result.figures)
+    assert all("Actual year" in f.detail for f in result.figures)
+
+
+# ───────────────────────────────────────────────── crosschecks
+
+def _blocks(books, nomenclature):
+    return {
+        b.dataset.key: b
+        for sheet in (ROW_WISE, EPI)
+        for b in [_block(books, nomenclature, sheet)]
+    }
+
+
+def test_all_declared_rules_pass_on_the_reference_workbook(books, nomenclature):
+    results = run_rules(nomenclature, _blocks(books, nomenclature))
+    assert [r.status for r in results] == ["passed"] * 3
+    assert results[0].left_value == results[0].right_value == 14400.0
+    assert results[1].left_value == results[1].right_value == 19200.0
+
+
+def test_a_broken_tie_fails_the_rule(books, nomenclature):
+    blocks = _blocks(books, nomenclature)
+    epi = blocks["02 EPI"]
+    next(r for r in epi.records if r.values["Year"] == "2025 9 months").values["EPI"] = 13000.0
+    results = run_rules(nomenclature, blocks)
+    assert results[0].status == "failed"
+    assert "14,400 = 13,000" in results[0].detail
+
+
+def test_differing_premium_basis_skips_rather_than_compares(books, nomenclature):
+    """Comparing GWP against GNPI silently would be worse than not checking."""
+    from datatransform.model import Attribute
+
+    blocks = _blocks(books, nomenclature)
+    blocks["02 EPI"].attributes["Premium basis"] = Attribute("Premium basis", "GWP", False, 4)
+    results = run_rules(nomenclature, blocks)
+    assert results[0].status == "skipped"
+    assert "Premium basis differs (GNPI vs GWP)" in results[0].detail
+
+
+def test_scale_is_normalised_before_comparing(books, nomenclature):
+    """01 in thousands against 02 in units must still tie."""
+    from datatransform.model import Attribute
+
+    blocks = _blocks(books, nomenclature)
+    epi = blocks["02 EPI"]
+    epi.attributes["Scale"] = Attribute("Scale", "1", False, 3)
+    for record in epi.records:
+        record.values["EPI"] *= 1000
+    results = run_rules(nomenclature, blocks)
+    assert [r.status for r in results] == ["passed"] * 3
+
+
+def test_a_missing_dataset_skips_rather_than_fails(books, nomenclature):
+    blocks = {"02 EPI": _block(books, nomenclature, EPI)}
+    results = run_rules(nomenclature, blocks)
+    assert results[0].status == "skipped" and "not extracted" in results[0].detail
+    assert results[2].status == "passed"          # R-07 is within 02 alone
+
+
+def test_failed_and_skipped_rules_become_questions(books, nomenclature):
+    blocks = _blocks(books, nomenclature)
+    next(r for r in blocks["02 EPI"].records
+         if r.values["Year"] == "2025 9 months").values["EPI"] = 13000.0
+    results = run_rules(nomenclature, blocks)
+    hyps = hypotheses_from(results, "02 EPI")
+    assert [h.attribute for h in hyps] == ["Crosscheck R-05"]
+    assert hyps[0].confidence is Confidence.OPEN
+
+
+def test_crosschecks_reach_both_sheets(workspace, tmp_path):
+    out = tmp_path / "out.xlsx"
+    report = run(workspace, out, tmp_path / "logs")
+    assert report.ok and report.rules_ok
+
+    wb = load_workbook(out, data_only=True)
+    for sheet in (ROW_WISE, EPI):
+        text = [c.value for row in wb[sheet].iter_rows() for c in row
+                if isinstance(c.value, str)]
+        assert any("Crosschecks against other sheets" in t for t in text), sheet
+        assert any(t == "R-05" for t in text), sheet
+
+
+def test_derived_figures_are_written_to_the_sheet(workspace, tmp_path):
+    out = tmp_path / "out.xlsx"
+    run(workspace, out, tmp_path / "logs")
+    ws = load_workbook(out, data_only=True)[EPI]
+    labels = [c.value for row in ws.iter_rows() for c in row if isinstance(c.value, str)]
+    assert "Estimation error" in labels
+    assert "Implied growth" in labels
+
+    values = [c.value for row in ws.iter_rows() for c in row
+              if isinstance(c.value, float) and 0.03 < c.value < 0.09]
+    assert any(abs(v - (19200 / 18500 - 1)) < 1e-9 for v in values)

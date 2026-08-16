@@ -11,7 +11,8 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from .extract import extract_sheet, last_non_empty_row
+from .crosschecks import hypotheses_from, results_for, run_rules
+from .extract import _number_hypotheses, extract_sheet, last_non_empty_row
 from .markers import read_markers
 from .model import Block, ExtractionError
 from .nomenclature import Nomenclature, read_nomenclature, sheet_sort_key
@@ -39,11 +40,16 @@ class RunReport:
     source_sha256: str
     started: datetime
     outcomes: list[SheetOutcome] = field(default_factory=list)
+    rule_results: list = field(default_factory=list)
     injected: int = 0
 
     @property
     def ok(self) -> bool:
         return all(o.status != "error" for o in self.outcomes)
+
+    @property
+    def rules_ok(self) -> bool:
+        return all(r.status != "failed" for r in self.rule_results)
 
 
 def sha256(path: Path) -> str:
@@ -141,13 +147,27 @@ def run(source: str | Path, output: str | Path | None = None,
 
     formula_values: list[tuple[str, str, float]] = []
 
+    # Pass 1 — extract every sheet, so the rules have both sides available.
     for title in sorted(out_wb.sheetnames, key=sheet_sort_key):
         if sheet_sort_key(title)[0] == "000":
             continue
-        outcome = _process_sheet(
-            title, values_wb, formulas_wb, out_wb, nomenclature, debug, process, formula_values
+        report.outcomes.append(
+            _extract_sheet_outcome(title, values_wb, formulas_wb, nomenclature, debug, process)
         )
-        report.outcomes.append(outcome)
+
+    blocks = {b.dataset.key: b for o in report.outcomes for b in o.blocks}
+    report.rule_results = run_rules(nomenclature, blocks)
+    _log_rules(report.rule_results, nomenclature, debug, process)
+
+    for outcome in report.outcomes:
+        for block in outcome.blocks:
+            block.crosschecks = results_for(report.rule_results, block.dataset.key)
+            block.hypotheses.extend(hypotheses_from(report.rule_results, block.dataset.key))
+            _number_hypotheses(block)
+
+    # Pass 2 — transform and write.
+    for outcome in report.outcomes:
+        _write_sheet(outcome, out_wb, nomenclature, debug, process, formula_values)
 
     out_wb.save(output)
     result = inject(output, formula_values)
@@ -163,8 +183,8 @@ def run(source: str | Path, output: str | Path | None = None,
     return report
 
 
-def _process_sheet(title, values_wb, formulas_wb, out_wb, nomenclature,
-                   debug, process, formula_values) -> SheetOutcome:
+def _extract_sheet_outcome(title, values_wb, formulas_wb, nomenclature,
+                           debug, process) -> SheetOutcome:
     dataset = nomenclature.dataset_for(title)
     if dataset is None:
         debug.info("%s: not declared in sheet 00 — skipped", title)
@@ -186,26 +206,39 @@ def _process_sheet(title, values_wb, formulas_wb, out_wb, nomenclature,
         process.info("%s — FAILED: %s", title, exc)
         return SheetOutcome(title, "error", str(exc))
 
-    outcome = SheetOutcome(title, "processed")
-    for block in blocks:
-        spec = step2_for(dataset.key)
-        if spec is None:
-            outcome.status = "error"
-            outcome.detail = f"no step-2 spec for dataset {dataset.key!r}"
-            process.info("%s — no step-2 spec for %s", title, dataset.key)
-            continue
-
-        result = apply_step2(block, spec)
-        formula_values.extend(write_blocks(out_wb[title], block, result))
-        outcome.blocks.append(block)
-        outcome.results.append(result)
-        _log_block(block, result, debug, process)
-
+    outcome = SheetOutcome(title, "processed", blocks=list(blocks))
     outcome.detail = (
         f"{len(outcome.blocks)} block(s), "
         f"{sum(len(b.records) for b in outcome.blocks)} record(s)"
     )
     return outcome
+
+
+def _write_sheet(outcome, out_wb, nomenclature, debug, process, formula_values) -> None:
+    for block in outcome.blocks:
+        spec = step2_for(block.dataset.key)
+        if spec is None:
+            outcome.status = "error"
+            outcome.detail = f"no step-2 spec for dataset {block.dataset.key!r}"
+            process.info("%s — no step-2 spec for %s", outcome.sheet, block.dataset.key)
+            continue
+
+        result = apply_step2(block, spec, nomenclature.actual_year)
+        formula_values.extend(write_blocks(out_wb[outcome.sheet], block, result))
+        outcome.results.append(result)
+        _log_block(block, result, debug, process)
+
+
+def _log_rules(results, nomenclature, debug, process) -> None:
+    if not results:
+        return
+    process.info("")
+    process.info("Crosschecks (⟦RULES⟧ of sheet 00, N = %s)", nomenclature.actual_year)
+    for r in results:
+        process.info("  %-6s %-8s %s %s %s — %s",
+                     r.rule.id, r.status.upper(), r.rule.left, r.rule.relation,
+                     r.rule.right, r.detail)
+        debug.info("rule %s: %s (%s)", r.rule.id, r.status, r.detail)
 
 
 def _log_block(block: Block, result: Step2Result, debug, process):

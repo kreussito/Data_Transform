@@ -27,6 +27,16 @@ class FieldType(str, Enum):
     def number_format(self) -> str:
         return "@" if self is FieldType.TEXT else "#,##0"
 
+    @classmethod
+    def parse(cls, text: str) -> "FieldType":
+        try:
+            return cls(str(text).strip().casefold())
+        except ValueError:
+            raise ExtractionError(
+                f"sheet 00 ⟦TYPES⟧: {text!r} is not a known datatype "
+                f"({', '.join(t.value for t in cls)})"
+            ) from None
+
 
 class Confidence(str, Enum):
     """Derived from the markers, never judged — spec §5.3.
@@ -120,6 +130,7 @@ class Block:
     attributes: dict[str, Attribute] = field(default_factory=dict)
     hypotheses: list[Hypothesis] = field(default_factory=list)
     coercions: list = field(default_factory=list)
+    crosschecks: list = field(default_factory=list)
     candidates: int = 0
     excluded: int = 0
     unextracted: list[str] = field(default_factory=list)
@@ -150,6 +161,49 @@ class Block:
                    if isinstance(r.values.get(m), (int, float)))
             for m in self.numeric_fields
         }
+
+
+@dataclass(frozen=True)
+class Rule:
+    """One row of ⟦RULES⟧ in sheet 00 — spec §10.1.
+
+    ``left`` and ``right`` are ``<dataset key>.<field>@<record>`` references; ``{N}``
+    and ``{N+1}`` resolve from ⟦GLOBAL⟧'s ``Actual year``.
+    """
+
+    id: str
+    left: str
+    relation: str
+    right: str
+    tolerance: float
+    severity: str
+    note: str = ""
+
+    @staticmethod
+    def parse_ref(ref: str) -> tuple[str, str, str]:
+        head, _, record = ref.partition("@")
+        key, _, field = head.rpartition(".")
+        if not key or not field or not record:
+            raise ExtractionError(
+                f"sheet 00 ⟦RULES⟧: {ref!r} is not of the form "
+                f"<dataset key>.<field>@<record>"
+            )
+        return key.strip(), field.strip(), record.strip()
+
+
+@dataclass
+class RuleResult:
+    """The outcome of evaluating a Rule — spec §10.1."""
+
+    rule: Rule
+    status: str                      # passed | failed | skipped
+    detail: str
+    left_value: float | None = None
+    right_value: float | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.status != "failed"
 
 
 class ExtractionError(Exception):

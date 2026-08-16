@@ -12,12 +12,24 @@ FIELD = re.compile(r"\{([^}]+)\}")
 
 
 @dataclass
+class Figure:
+    """A computed block-level figure — spec §9.2.1."""
+
+    name: str
+    value: float | None
+    detail: str
+    number_format: str
+    note: str = ""
+
+
+@dataclass
 class Step2Result:
     block: Block
     spec: Step2Spec
     records: list[Record]
     computed: dict[str, list[float | None]] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    figures: list[Figure] = field(default_factory=list)
 
     @property
     def declared_columns(self) -> tuple[str, ...]:
@@ -64,7 +76,43 @@ def _sort_key(record: Record, fields):
     return [_natural_key(record.values.get(f)) for f in fields]
 
 
-def apply_step2(block: Block, spec: Step2Spec) -> Step2Result:
+def _derived_figures(block: Block, spec: Step2Spec, actual_year: int | None):
+    """Figures relating two records — resolved by leading number, then suffix."""
+    from .crosschecks import match_record
+
+    out = []
+    for figure in spec.figures:
+        if actual_year is None:
+            out.append(Figure(figure.name, None,
+                              "no 'Actual year' in ⟦GLOBAL⟧, so {N} cannot resolve",
+                              figure.number_format, figure.note))
+            continue
+
+        num = match_record(block, figure.numerator, actual_year)
+        den = match_record(block, figure.denominator, actual_year)
+        missing = [p for p, r in ((figure.numerator, num), (figure.denominator, den))
+                   if r is None]
+        if missing:
+            out.append(Figure(figure.name, None,
+                              f"no record matching {' and '.join(missing)}",
+                              figure.number_format, figure.note))
+            continue
+
+        a, b = num.values.get(figure.field), den.values.get(figure.field)
+        if not isinstance(a, (int, float)) or not isinstance(b, (int, float)) or b == 0:
+            out.append(Figure(figure.name, None,
+                              f"{figure.field} missing or zero on one of the records",
+                              figure.number_format, figure.note))
+            continue
+
+        value = a / b - 1 if figure.kind == "ratio_minus_1" else a / b
+        detail = (f"{num.values[block.dataset.key_field]} {a:,.0f} ÷ "
+                  f"{den.values[block.dataset.key_field]} {b:,.0f} − 1")
+        out.append(Figure(figure.name, value, detail, figure.number_format, figure.note))
+    return out
+
+
+def apply_step2(block: Block, spec: Step2Spec, actual_year: int | None = None) -> Step2Result:
     missing = [f for f in spec.sort_by if f not in block.dataset.headers]
     if missing:
         raise ExtractionError(f"step 2 sorts by {missing}, which the dataset does not declare")
@@ -101,6 +149,7 @@ def apply_step2(block: Block, spec: Step2Spec) -> Step2Result:
 
     result = Step2Result(
         block=block, spec=spec, records=records, computed=computed, notes=notes,
+        figures=_derived_figures(block, spec, actual_year),
     )
 
     # Sorting and reordering cannot move a total; if they do, that is a bug — spec §10 C3.

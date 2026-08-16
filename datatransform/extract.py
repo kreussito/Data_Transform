@@ -21,7 +21,6 @@ from .model import (
     Record,
 )
 from .nomenclature import Nomenclature, norm
-from .specs import field_types_for
 
 ERROR_CELLS = {"#REF!", "#N/A", "#VALUE!", "#DIV/0!", "#NAME?", "#NULL!", "#NUM!"}
 LEADING_NUMBER = re.compile(r"^\s*(\d+)")
@@ -71,8 +70,15 @@ def _lenient(value, block: Block, label: str, ref: str):
 
 
 def _resolve_attributes(block: Block, markers, nomenclature: Nomenclature) -> None:
-    """Attributes, hypotheses and derived confidence — spec §5."""
+    """Attributes, hypotheses and derived confidence — spec §5.
+
+    Three tiers: ⟦GLOBAL⟧ in sheet 00, then sheet-wide markers, then block markers.
+    """
     found = attributes_for(markers, block.index)
+
+    for name, value in nomenclature.globals.items():
+        if name in block.dataset.attributes and name not in found:
+            block.attributes[name] = Attribute(name, value, False, 0)
 
     for name, marker in found.items():
         if name not in block.dataset.attributes:
@@ -247,7 +253,7 @@ def extract_block(values_ws, formulas_ws, dataset: Dataset, markers, index: int,
         header_ref=header_ref,
         info_ref=info_ref,
         address_map=address,
-        field_types=field_types_for(dataset.key, dataset.headers),
+        field_types=nomenclature.field_types(dataset.headers),
     )
     _resolve_attributes(block, markers, nomenclature)
 
