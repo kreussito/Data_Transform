@@ -663,7 +663,8 @@ def test_dataset_register_stops_at_the_next_block(nomenclature):
     """⟦RULES⟧ rows must not be read as datasets."""
     assert set(nomenclature.datasets) == {
         "01. History", "02. EPI Projections", "03. Large Losses",
-        "04. Cat Losses", "05. Risk Profiles", "01. History_Transposed",
+        "04. Cat Losses", "05. Risk Profiles",
+        "01. History_Transposed", "02. EPI Projections_Transposed",
     }
 
 
@@ -728,7 +729,7 @@ def test_split_label():
 
 def test_derived_figures_are_block_level(books, nomenclature):
     b = _block(books, nomenclature, EPI)
-    result = apply_step2(b, step2_for(b.dataset.key), nomenclature.actual_year)
+    result = apply_step2(b, step2_for(b.dataset.key), nomenclature)
     figures = {f.name: f.value for f in result.figures}
     assert figures["Estimation error"] == pytest.approx(19200 / 18500 - 1)
     assert figures["Implied growth"] == pytest.approx(20900 / 19200 - 1)
@@ -737,7 +738,7 @@ def test_derived_figures_are_block_level(books, nomenclature):
 def test_derived_figures_report_rather_than_guess(books, nomenclature):
     b = _block(books, nomenclature, EPI)
     b.records = [r for r in b.records if r.values["Year"] != "2025 est"]
-    result = apply_step2(b, step2_for(b.dataset.key), nomenclature.actual_year)
+    result = apply_step2(b, step2_for(b.dataset.key), nomenclature)
     estimation = next(f for f in result.figures if f.name == "Estimation error")
     assert estimation.value is None
     assert "no record matching" in estimation.detail
@@ -745,7 +746,7 @@ def test_derived_figures_report_rather_than_guess(books, nomenclature):
 
 def test_figures_need_N(books, nomenclature):
     b = _block(books, nomenclature, EPI)
-    result = apply_step2(b, step2_for(b.dataset.key), actual_year=None)
+    result = apply_step2(b, step2_for(b.dataset.key), nomenclature=None)
     assert all(f.value is None for f in result.figures)
     assert all("Actual year" in f.detail for f in result.figures)
 
@@ -841,3 +842,99 @@ def test_derived_figures_are_written_to_the_sheet(workspace, tmp_path):
     values = [c.value for row in ws.iter_rows() for c in row
               if isinstance(c.value, float) and 0.03 < c.value < 0.09]
     assert any(abs(v - (19200 / 18500 - 1)) < 1e-9 for v in values)
+
+
+# ════════════════════════════════════ ⟦PERIOD ORDER⟧ · transposed 02
+
+EPI_T = "02. EPI Projections_Transposed"
+
+
+def test_period_order_is_read_from_sheet_00(nomenclature):
+    assert nomenclature.period_order == {"est": 1, "9 months": 2, "re-est": 3}
+
+
+def test_declared_period_order_beats_alphanumeric(books, nomenclature):
+    """'9 months' sorts after 'est', though '9' < 'e' alphanumerically."""
+    b = _block(books, nomenclature, EPI)
+    result = apply_step2(b, step2_for(b.dataset.key), nomenclature)
+    assert [r.values["Year"] for r in result.records] == [
+        "2025 est", "2025 9 months", "2025 re-est", "2026",
+    ]
+
+
+def test_without_a_declared_order_it_falls_back_to_alphanumeric(books, nomenclature):
+    from datatransform.nomenclature import Nomenclature
+
+    b = _block(books, nomenclature, EPI)
+    bare = Nomenclature(nomenclature.datasets, nomenclature.vocabulary,
+                        nomenclature.globals, nomenclature.types, nomenclature.rules)
+    result = apply_step2(b, step2_for(b.dataset.key), bare)
+    assert [r.values["Year"] for r in result.records] == [
+        "2025 9 months", "2025 est", "2025 re-est", "2026",
+    ]
+
+
+def test_a_bare_year_sorts_before_its_qualified_views(books, nomenclature):
+    b = _block(books, nomenclature, ROW_WISE)
+    result = apply_step2(b, step2_for(b.dataset.key), nomenclature)
+    years = [r.values["Year"] for r in result.records]
+    assert years[-2:] == ["2025", "2025 9 months"]
+
+
+def test_an_undeclared_suffix_sorts_last_and_stays_deterministic(books, nomenclature):
+    b = _block(books, nomenclature, EPI)
+    b.records[-1].values["Year"] = "2025 half year"      # not in ⟦PERIOD ORDER⟧
+    result = apply_step2(b, step2_for(b.dataset.key), nomenclature)
+    assert [r.values["Year"] for r in result.records] == [
+        "2025 est", "2025 9 months", "2025 re-est", "2025 half year",
+    ]
+
+
+def test_sort_note_records_the_period_order(books, nomenclature):
+    b = _block(books, nomenclature, EPI)
+    result = apply_step2(b, step2_for(b.dataset.key), nomenclature)
+    assert "period order est → 9 months → re-est" in result.notes[0]
+
+
+# ───────────────────────────────────────── transposed 02
+
+def test_transposed_epi_resolution(books, nomenclature):
+    b = _block(books, nomenclature, EPI_T)
+    assert b.orientation is Orientation.TRANSPOSED
+    assert b.header_ref == "C" and b.info_ref == "14"
+    assert b.address_map == {"Year": "8", "EPI": "10"}
+    assert (b.candidates, len(b.records), b.excluded) == (5, 4, 1)
+
+
+def test_both_epi_orientations_are_equivalent(books, nomenclature):
+    a = _block(books, nomenclature, EPI)
+    b = _block(books, nomenclature, EPI_T)
+    assert [r.values for r in a.records] == [r.values for r in b.records]
+    assert a.totals() == b.totals() == {"EPI": 73000.0}
+    assert a.provenance_label != b.provenance_label
+
+
+def test_derived_figures_match_across_orientations(books, nomenclature):
+    figures = {}
+    for sheet in (EPI, EPI_T):
+        b = _block(books, nomenclature, sheet)
+        result = apply_step2(b, step2_for(b.dataset.key), nomenclature)
+        figures[sheet] = {f.name: f.value for f in result.figures}
+    assert figures[EPI] == figures[EPI_T]
+    assert figures[EPI]["Estimation error"] == pytest.approx(19200 / 18500 - 1)
+
+
+def test_record_matching_works_transposed(books, nomenclature):
+    b = _block(books, nomenclature, EPI_T)
+    assert match_record(b, "{N} re-est", 2025).values["EPI"] == 19200.0
+    assert match_record(b, "{N+1}", 2025).values["EPI"] == 20900.0
+
+
+def test_all_four_data_sheets_process(workspace, tmp_path):
+    out = tmp_path / "out.xlsx"
+    report = run(workspace, out, tmp_path / "logs")
+    assert report.ok and report.rules_ok
+    processed = {o.sheet: o.detail for o in report.outcomes if o.status == "processed"}
+    assert set(processed) == {ROW_WISE, TRANSPOSED, EPI, EPI_T}
+    assert processed[EPI] == processed[EPI_T] == "1 block(s), 4 record(s)"
+    assert processed[ROW_WISE] == processed[TRANSPOSED] == "1 block(s), 6 record(s)"

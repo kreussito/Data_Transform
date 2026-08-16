@@ -56,6 +56,9 @@ is written as a visible block with control sums that tie back to the step before
 | `Exchange rates` | FX rates for conversion | Authored |
 | `20. Summary` | Collected step-2 blocks | **Generated** |
 
+The reference workbook carries `01` and `02` in both orientations, as
+`…_Transposed` sheets, so every rule is exercised both ways.
+
 There is no separate register sheet. Assumptions, hypotheses and control sums are
 documented **in the sheet they belong to**, beneath the original data, so a reviewer
 never has to cross-reference another tab to see how a figure was arrived at.
@@ -160,6 +163,19 @@ Attributes now resolve in **three tiers**, each overriding the one above:
 **A field name carries one type across the whole workbook** — which is precisely what a
 nomenclature is for. A declared field with no entry here is an error; nothing is
 defaulted, because defaulting `Claim Reference` to a number would be silent and wrong.
+
+#### `⟦PERIOD ORDER⟧` — how suffixes sort within one year
+
+| Rank | Suffix |
+|---|---|
+| 1 | `est` |
+| 2 | `9 months` |
+| 3 | `re-est` |
+
+Plain alphanumeric would put `2025 9 months` before `2025 est`, because `9` sorts
+before `e`. Chronologically that is backwards. This block states the intended order;
+a bare year sorts first, and a suffix nobody declared sorts last — so the ordering
+stays total whatever a pack contains. See §9.2 S13.
 
 #### `⟦RULES⟧` — crosschecks and interdependencies
 
@@ -492,11 +508,22 @@ sums tying back to step 1.
 | **S10** | Key labels preserved verbatim — never parsed, merged or de-duplicated. A repeated leading number raises an overlap hypothesis | — |
 | **S11** | **Step 1 carries only extracted information.** Every computed figure belongs to step 2 | — |
 | **S12** | Figures relating *two records* are written as **block-level derived figures** beneath the data, not as columns | value-adding |
+| **S13** | Within one leading number, suffixes sort by the rank declared in `⟦PERIOD ORDER⟧`, not alphabetically | value-preserving |
 
 **S11.** A reviewer must be able to compare step 1 against the source cell by cell with
 nothing interposed. Step 1's control sums are not an exception: they *verify the
 extraction* rather than deriving a business measure, and they are what makes the
 cell-by-cell comparison checkable.
+
+**S13.** With the declared order in place, sheet 02 reads chronologically:
+
+```
+2025 est · 2025 9 months · 2025 re-est · 2026
+```
+
+Without it, alphanumeric ordering would give `2025 9 months · 2025 est · 2025 re-est`,
+which invites the reader to compare the wrong pair. The fallback is unchanged: no
+declared order means plain natural sort.
 
 **S12.** `Loss Ratio %` describes one record, so it is a column. `Estimation error` and
 `Implied growth` each relate two records, so they have no per-row meaning:
@@ -745,6 +772,11 @@ the run fails rather than reporting a plausible wrong number.
 - `01. History` — row-wise, 6 records
 - `01. History_Transposed` — transposed, 6 records
 - `02. EPI Projections` — row-wise, 4 records: `N est`, `N 9 months`, `N re-est`, `N+1`
+- `02. EPI Projections_Transposed` — transposed, the same 4 records
+
+Each dataset is present in both orientations and verified to produce identical output —
+same records, same totals, same derived figures — differing only in whether provenance
+reads `Source row` or `Source column`.
 
 Both `01` sheets carry identical data and are verified to produce identical output,
 differing only in whether provenance reads `Source row` or `Source column`.

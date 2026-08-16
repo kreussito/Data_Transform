@@ -94,6 +94,7 @@ STEP2: dict[str, Step2Spec] = {
 
 # The transposed reference sheet is the same dataset in a different orientation.
 STEP2["01 History_T"] = STEP2["01 History"]
+STEP2["02 EPI_T"] = STEP2["02 EPI"]
 
 
 def step2_for(dataset_key: str) -> Step2Spec | None:

@@ -18,6 +18,7 @@ GLOBAL_ANCHOR = "⟦GLOBAL⟧"
 TYPES_ANCHOR = "⟦TYPES⟧"
 VOCAB_ANCHOR = "⟦VOCABULARY⟧"
 RULES_ANCHOR = "⟦RULES⟧"
+PERIOD_ANCHOR = "⟦PERIOD ORDER⟧"
 
 
 def norm(value) -> str:
@@ -96,12 +97,14 @@ def _read_block(ws, anchor: str, columns: int, skip_label_row: bool = True):
 class Nomenclature:
     """Sheet 00: the frame — datasets, globals, types, vocabulary and rules."""
 
-    def __init__(self, datasets, vocabulary, globals_=None, types=None, rules=None):
+    def __init__(self, datasets, vocabulary, globals_=None, types=None,
+                 rules=None, period_order=None):
         self.datasets = datasets
         self.vocabulary = vocabulary
         self.globals = globals_ or {}
         self.types = types or {}
         self.rules = rules or []
+        self.period_order = period_order or {}
 
     @property
     def actual_year(self) -> int | None:
@@ -160,6 +163,7 @@ class Nomenclature:
             cls._read_globals(ws),
             cls._read_types(ws),
             cls._read_rules(ws),
+            cls._read_period_order(ws),
         )
 
     @staticmethod
@@ -172,6 +176,21 @@ class Nomenclature:
             name.casefold(): FieldType.parse(kind)
             for _, (name, kind) in _read_block(ws, TYPES_ANCHOR, 2)
         }
+
+    @staticmethod
+    def _read_period_order(ws) -> dict[str, int]:
+        """Suffix → rank, for sorting within one leading number — spec §9.2 S13."""
+        order = {}
+        for row, (rank, suffix) in _read_block(ws, PERIOD_ANCHOR, 2):
+            if not suffix:
+                continue
+            try:
+                order[suffix.casefold()] = int(float(rank))
+            except ValueError:
+                raise ExtractionError(
+                    f"sheet 00 ⟦PERIOD ORDER⟧ row {row}: rank {rank!r} is not a number"
+                ) from None
+        return order
 
     @staticmethod
     def _read_rules(ws) -> list[Rule]:

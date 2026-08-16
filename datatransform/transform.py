@@ -72,8 +72,34 @@ def _natural_key(value):
     return tuple(parts) or ((1, 0, ""),)
 
 
-def _sort_key(record: Record, fields):
-    return [_natural_key(record.values.get(f)) for f in fields]
+def _period_key(value, order: dict[str, int]):
+    """Leading number, then declared suffix rank — spec §9.2 S13.
+
+    Plain alphanumeric would order ``2025 9 months`` before ``2025 est``, because
+    ``9`` sorts before ``e``. The declared order in ⟦PERIOD ORDER⟧ says otherwise:
+    within one year, ``est`` precedes ``9 months`` precedes ``re-est``. A bare year
+    sorts first; a suffix nobody declared sorts last, then alphanumerically among
+    its kind, so the ordering stays total whatever a pack contains.
+    """
+    from .crosschecks import split_label
+
+    number, suffix = split_label(value)
+    if number is None:
+        return None
+    if not suffix:
+        rank = 0
+    else:
+        rank = order.get(suffix.casefold(), max(order.values(), default=0) + 1)
+    return ((0, number, ""), (0, rank, ""), *_natural_key(suffix))
+
+
+def _sort_key(record: Record, fields, order=None):
+    key = []
+    for f in fields:
+        value = record.values.get(f)
+        period = _period_key(value, order) if order else None
+        key.append(period if period is not None else _natural_key(value))
+    return key
 
 
 def _derived_figures(block: Block, spec: Step2Spec, actual_year: int | None):
@@ -112,12 +138,15 @@ def _derived_figures(block: Block, spec: Step2Spec, actual_year: int | None):
     return out
 
 
-def apply_step2(block: Block, spec: Step2Spec, actual_year: int | None = None) -> Step2Result:
+def apply_step2(block: Block, spec: Step2Spec, nomenclature=None) -> Step2Result:
     missing = [f for f in spec.sort_by if f not in block.dataset.headers]
     if missing:
         raise ExtractionError(f"step 2 sorts by {missing}, which the dataset does not declare")
 
-    records = sorted(block.records, key=lambda r: _sort_key(r, spec.sort_by),
+    actual_year = getattr(nomenclature, "actual_year", None)
+    order = getattr(nomenclature, "period_order", None) or {}
+
+    records = sorted(block.records, key=lambda r: _sort_key(r, spec.sort_by, order),
                      reverse=not spec.ascending)
 
     computed: dict[str, list[float | None]] = {}
@@ -136,10 +165,13 @@ def apply_step2(block: Block, spec: Step2Spec, actual_year: int | None = None) -
                 column.append(None)
         computed[calc.name] = column
 
+    sort_note = (f"sorted by {', '.join(spec.sort_by)} "
+                 f"{'ascending' if spec.ascending else 'descending'}, natural alphanumeric")
+    if order:
+        ranked = " → ".join(s for s, _ in sorted(order.items(), key=lambda kv: kv[1]))
+        sort_note += f", period order {ranked}"
     notes = [
-        f"sorted by {', '.join(spec.sort_by)} "
-        f"{'ascending' if spec.ascending else 'descending'}, natural alphanumeric "
-        f"(value-preserving)",
+        f"{sort_note} (value-preserving)",
         f"columns ordered as declared in sheet 00: "
         f"{' | '.join(block.dataset.headers)} (value-preserving)",
     ]

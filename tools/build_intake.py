@@ -86,6 +86,8 @@ datasets = [
      ["Currency", "Scale", "Exposure basis", "As at"], True),
     (10, "01. History_Transposed", "01 History_T",
      ["Year", "Premium", "Incurred Losses"], ATTRS_01, False),
+    (11, "02. EPI Projections_Transposed", "02 EPI_T",
+     ["Year", "EPI"], ATTRS_02, False),
 ]
 
 for row, sheet, key, headers, attrs, provisional in datasets:
@@ -104,7 +106,7 @@ for row, sheet, key, headers, attrs, provisional in datasets:
             c.fill = yellow
 
 # ── ⟦GLOBAL⟧
-r = block(ws, 12, "⟦GLOBAL⟧", ["Attribute", "Value"])
+r = block(ws, 13, "⟦GLOBAL⟧", ["Attribute", "Value"])
 for name, value in [("Actual year", 2025),
                     ("Cedent", "Example Insurance SA"),
                     ("Treaty", "Property per Risk XL")]:
@@ -116,7 +118,7 @@ put(ws, f"B{r + 1}", "Actual year is N: the expiring year. The renewal being und
                      "the sheet.", sub_f)
 
 # ── ⟦TYPES⟧
-r = block(ws, 18, "⟦TYPES⟧", ["Field", "Type"])
+r = block(ws, r + 3, "⟦TYPES⟧", ["Field", "Type"])
 types = [
     ("Year", "text"), ("Premium", "number"), ("Incurred Losses", "number"),
     ("EPI", "number"), ("Band", "text"), ("Number of Risks", "number"),
@@ -131,7 +133,7 @@ put(ws, f"B{r + 1}", "A field name carries one type across the whole workbook. "
                      "Year is text because 2026 and '2026 9 months' are two records.", sub_f)
 
 # ── ⟦VOCABULARY⟧
-r = block(ws, 32, "⟦VOCABULARY⟧", ["Attribute", "Permitted values"])
+r = block(ws, r + 3, "⟦VOCABULARY⟧", ["Attribute", "Permitted values"])
 for name, values in [
     ("Year basis", "UW | Occurrence"),
     ("Premium basis", "GWP | GNPI | Written | Earned | Signed"),
@@ -145,8 +147,18 @@ for name, values in [
     put(ws, f"C{r}", values, body_f)
     r += 1
 
+# ── ⟦PERIOD ORDER⟧ — how suffixes sort within one leading number
+r = block(ws, r + 2, "⟦PERIOD ORDER⟧", ["Rank", "Suffix"])
+for rank, suffix in [(1, "est"), (2, "9 months"), (3, "re-est")]:
+    put(ws, f"B{r}", rank, body_f, fmt="0")
+    put(ws, f"C{r}", suffix, body_f, blue)
+    r += 1
+put(ws, f"B{r + 1}", "Within one year the suffixes sort in this order, not alphabetically: "
+                     "est comes before 9 months even though '9' < 'e'. A bare year sorts "
+                     "first; an unlisted suffix sorts last.", sub_f)
+
 # ── ⟦RULES⟧
-r = block(ws, 43, "⟦RULES⟧",
+r = block(ws, r + 3, "⟦RULES⟧",
           ["ID", "Left", "Rel", "Right", "Tolerance", "Severity", "Note"])
 rules = [
     ("R-05", "01 History.Premium@{N} 9 months", "=", "02 EPI.EPI@{N} 9 months",
@@ -170,7 +182,7 @@ put(ws, f"B{r + 1}", "Form: <key>.<field>@<record>.  {N} resolves from ⟦GLOBAL
                      "guessed, when Premium basis / Currency differ.", sub_f)
 
 # ── ⟦MARKERS⟧
-r = block(ws, 51, "⟦MARKERS⟧  —  written in column A of every other sheet",
+r = block(ws, r + 3, "⟦MARKERS⟧  —  written in column A of every other sheet",
           ["Marker", "Meaning"])
 for m, d in [
     ("Header_i", "row-wise: this row is block i's extraction row (declared labels only)"),
@@ -393,6 +405,61 @@ ws.column_dimensions["D"].width = 10
 ws.column_dimensions["E"].width = 30
 ws.column_dimensions["F"].width = 44
 ws.column_dimensions["K"].width = 10
+
+# ══════════════════════════════════════════════════ 02. EPI Projections_Transposed
+ws = wb.create_sheet("02. EPI Projections_Transposed")
+
+put(ws, "B1", "02. EPI Projections — transposed (same data, same result)", title_f)
+
+for row, txt in {
+    2: "Currency = USD",
+    3: "Scale = 1,000",
+    4: "Premium basis = GNPI",
+    5: "Transpose_1",
+    6: "Header_1 = C",
+    7: "Info_1 = 14",
+    8: "H_Year basis = UW",
+    10: "As at = 31.12.2025",
+}.items():
+    c = ws.cell(row=row, column=1, value=txt)
+    c.fill = yellow
+    c.font = marker_f if txt.startswith(("Header_", "Info_", "Transpose_")) else attr_f
+    c.border = box
+
+# column B — the sheet's own labels, inert
+for row, txt in [(8, "Period"), (9, "Share %"), (10, "EPI (net)"), (11, "Comment")]:
+    ws.cell(row=row, column=2, value=txt).font = inert_f
+
+# column C — the extraction column
+for row, txt in [(8, "Year"), (10, "EPI")]:
+    c = ws.cell(row=row, column=3, value=txt)
+    c.font, c.fill, c.border = head_f, blue, box
+
+# columns D..G the records, H an unmarked one
+labels = [*periods, "2024 actual"]
+values = [*epi, 17800]
+shares = [*share, 1.00]
+notes = [*comment, "covered by 01. History"]
+for i, label in enumerate(labels):
+    col = 4 + i
+    put(ws, f"{chr(64 + col)}8", label, body_f, fmt="@")
+    put(ws, f"{chr(64 + col)}9", shares[i], body_f, fmt="0%")
+    put(ws, f"{chr(64 + col)}10", values[i], body_f, fmt="#,##0")
+    put(ws, f"{chr(64 + col)}11", notes[i], sub_f)
+
+put(ws, "C14", "selector →", sub_f)
+for i in range(len(periods)):                    # the 2024 actual column stays unmarked
+    c = ws.cell(row=14, column=4 + i, value="=COLUMN()")
+    c.font, c.fill, c.border = body_f, green, box
+
+put(ws, "B16", "Column H (2024 actual) has no selector: not extracted here, "
+               "because 01. History carries the actuals.", sub_f)
+
+ws.column_dimensions["A"].width = 30
+ws.column_dimensions["B"].width = 14
+ws.column_dimensions["C"].width = 14
+for col in "DEFGH":
+    ws.column_dimensions[col].width = 17
 
 wb.save(OUT)
 print("written:", OUT)

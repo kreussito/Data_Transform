@@ -223,7 +223,7 @@ def _write_sheet(outcome, out_wb, nomenclature, debug, process, formula_values) 
             process.info("%s — no step-2 spec for %s", outcome.sheet, block.dataset.key)
             continue
 
-        result = apply_step2(block, spec, nomenclature.actual_year)
+        result = apply_step2(block, spec, nomenclature)
         formula_values.extend(write_blocks(out_wb[outcome.sheet], block, result))
         outcome.results.append(result)
         _log_block(block, result, debug, process)
