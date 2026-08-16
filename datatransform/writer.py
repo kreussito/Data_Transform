@@ -276,8 +276,44 @@ class BlockWriter:
                 f"{', '.join(calc_names)} is value-adding, so no tie-back applies; "
                 "it is written as a live formula over the columns above."
             )
+        self._write_aggregate(result)
         self._write_figures(result)
         self._write_crosschecks(result.block)
+
+    def _write_aggregate(self, result: Step2Result) -> None:
+        """The second step-2 table — spec §9.2.1 S14."""
+        table = result.aggregate
+        if table is None:
+            return
+        self.row += 2
+        self._put(FIRST_COL, table.title, head_f, fill=step2_fill)
+        self.row += 1
+        if table.zero_filled:
+            self._line(f"Years with no record are shown as 0: {', '.join(table.zero_filled)}")
+
+        self._put(FIRST_COL, table.group_by, head_f, fill=step2_fill)
+        for i, measure in enumerate(table.measures, start=1):
+            self._put(FIRST_COL + i, measure, head_f, fill=step2_fill)
+        self.row += 1
+
+        first = self.row
+        for key, values in table.rows:
+            self._put(FIRST_COL, key, body_f, "@")
+            for i, measure in enumerate(table.measures, start=1):
+                self._put(FIRST_COL + i, values.get(measure, 0.0), body_f,
+                          result.block.number_format(measure))
+            self.row += 1
+        last = self.row - 1
+
+        self._put(FIRST_COL, f"Control  (n = {len(table.rows)})", ctrl_f, fill=ctrl_fill)
+        totals = table.totals()
+        for i, measure in enumerate(table.measures, start=1):
+            letter = col_letter(FIRST_COL + i)
+            self._formula(FIRST_COL + i, f"=SUM({letter}{first}:{letter}{last})",
+                          totals.get(measure), result.block.number_format(measure),
+                          ctrl_f, ctrl_fill)
+        self.row += 1
+        self._line("Grouping is value-preserving: this total must equal the detail total above.")
 
     def _write_figures(self, result: Step2Result) -> None:
         """Block-level derived figures — spec §9.2.1."""
@@ -304,7 +340,7 @@ class BlockWriter:
         self._put(FIRST_COL, "Crosschecks against other sheets", head_f, fill=step2_fill)
         self.row += 1
         for result in block.crosschecks:
-            self._put(FIRST_COL, result.rule.id, ctrl_f)
+            self._put(FIRST_COL, result.label, ctrl_f)
             self._put(FIRST_COL + 1, result.status.upper(),
                       ctrl_f, fill=None if result.status == "passed" else ctrl_fill)
             self._put(FIRST_COL + 2,

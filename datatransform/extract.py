@@ -132,12 +132,59 @@ def _resolve_attributes(block: Block, markers, nomenclature: Nomenclature) -> No
             )
 
 
+def _check_occurrence_year(block: Block) -> None:
+    """Under an occurrence basis the year must match the loss date — spec §10.2.
+
+    Under an underwriting basis it legitimately need not: a policy incepting in one
+    year can produce a loss in the next. So the check runs only where the declared
+    basis makes it meaningful, and stays silent otherwise.
+    """
+    basis = block.attributes.get("Year basis")
+    if basis is None or norm(basis.value).casefold() != "occurrence":
+        return
+
+    key = block.dataset.key_field
+    date_fields = [h for h in block.dataset.headers
+                   if block.field_types.get(h) is FieldType.DATE]
+    if not date_fields:
+        return
+
+    mismatched = []
+    for record in block.records:
+        label = record.values.get(key)
+        match = LEADING_NUMBER.match(label) if isinstance(label, str) else None
+        if match is None:
+            continue
+        for field_name in date_fields:
+            value = record.values.get(field_name)
+            if value is not None and value.year != int(match.group(1)):
+                mismatched.append(f"{record.source_ref}: {label} vs {value.isoformat()}")
+
+    if mismatched:
+        block.hypotheses.append(
+            Hypothesis(
+                id="",
+                dataset_key=block.dataset.key,
+                attribute="Occurrence year mismatch",
+                value=f"{len(mismatched)} record(s)",
+                confidence=Confidence.OPEN,
+                source="tool",
+                note=("Year basis is Occurrence, so the year must equal the year of the "
+                      "loss date: " + "; ".join(mismatched[:5])),
+            )
+        )
+
+
 def _check_period_overlap(block: Block) -> None:
     """Repeated leading year means overlapping periods — spec §9.2 S10.
 
     ``2026`` and ``2026 9 months`` are two records of the same year, so a column total
     counts that year twice. The tool flags it and changes nothing: which record to use
     is an underwriting judgment, not the tool's to make.
+
+    Only *distinct* labels count. Eight large losses sharing the year 2021 are eight
+    claims, not an overlapping period — a transactional listing has many records per
+    year by nature, and flagging that would bury the real signal.
     """
     key = block.dataset.key_field
     if block.field_types.get(key) is not FieldType.TEXT:
@@ -149,8 +196,8 @@ def _check_period_overlap(block: Block) -> None:
         if not isinstance(label, str):
             continue
         match = LEADING_NUMBER.match(label)
-        if match:
-            groups.setdefault(match.group(1), []).append(label)
+        if match and label not in groups.setdefault(match.group(1), []):
+            groups[match.group(1)].append(label)
 
     for year, labels in sorted(groups.items()):
         if len(labels) > 1:
@@ -263,6 +310,7 @@ def extract_block(values_ws, formulas_ws, dataset: Dataset, markers, index: int,
         _select_columns(block, values_ws, formulas_ws, limit_row, limit_col, where)
 
     _check_period_overlap(block)
+    _check_occurrence_year(block)
     _number_hypotheses(block)
     return block
 
@@ -308,10 +356,12 @@ def _select_rows(block: Block, values_ws, formulas_ws, limit_row, limit_col, whe
                 f"{row} — the sheet has been manipulated and the markers no longer align"
             )
         values = {}
+        date_format = block.attributes.get("Date format")
         for label, col in block.address_map.items():
             raw = _check_cell(values_ws, formulas_ws, row, col_idx(col), where)
             values[label] = coerce(raw, block.field_types[label], label,
-                                   f"{col}{row}", block.coercions)
+                                   f"{col}{row}", block.coercions,
+                                   date_format.value if date_format else None)
         block.records.append(Record(source_ref=str(row), values=values))
 
     extracted = {col_idx(c) for c in block.address_map.values()}
@@ -362,10 +412,12 @@ def _select_columns(block: Block, values_ws, formulas_ws, limit_row, limit_col, 
                 f"{col_letter(col)} ({col}) — the sheet has been manipulated"
             )
         values = {}
+        date_format = block.attributes.get("Date format")
         for label, row in block.address_map.items():
             raw = _check_cell(values_ws, formulas_ws, int(row), col, where)
             values[label] = coerce(raw, block.field_types[label], label,
-                                   f"{col_letter(col)}{row}", block.coercions)
+                                   f"{col_letter(col)}{row}", block.coercions,
+                                   date_format.value if date_format else None)
         # Row-level confidence applies to transposed blocks only — spec §5.3, user ad 7.
         block.records.append(
             Record(source_ref=col_letter(col), values=values, confidence=block.confidence)

@@ -4,6 +4,7 @@
 Run from the repository root:  python tools/build_intake.py
 """
 
+from datetime import date
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -59,16 +60,18 @@ ws.title = "00. NC+Interdep"
 put(ws, "B1", "00. Nomenclature & Interdependencies", title_f)
 put(ws, "B2", "The frame: what each sheet holds, what the names mean, what must tie. "
               "Column A is intentionally empty — no markers in this sheet.", sub_f)
-put(ws, "B3", "Rows 7-9 are provisional sketches, not yet specified.", sub_f)
+put(ws, "B3", "Rows 8-9 are provisional sketches, not yet specified.", sub_f)
 
 # ── dataset register (rows 4-10, as agreed: dataset 01 on row 5)
 for ref, txt in [("B4", "Sheet name"), ("C4", "Key"),
                  ("D4", "Headers  →"), ("N4", "Attributes  →")]:
     put(ws, ref, txt, head_f, grey)
 
-ATTRS_01 = ["Currency", "Scale", "Year basis", "Premium basis",
+ATTRS_01 = ["Currency", "Scale", "Share basis", "Year basis", "Premium basis",
             "Loss basis", "PF transfer", "As at"]
-ATTRS_02 = ["Currency", "Scale", "Year basis", "Premium basis", "As at"]
+ATTRS_02 = ["Currency", "Scale", "Share basis", "Year basis", "Premium basis", "As at"]
+ATTRS_03 = ["Currency", "Scale", "Share basis", "Year basis", "Loss basis",
+            "Threshold", "Date format", "As at"]
 
 datasets = [
     (5, "01. History", "01 History",
@@ -76,8 +79,7 @@ datasets = [
     (6, "02. EPI Projections", "02 EPI",
      ["Year", "EPI"], ATTRS_02, False),
     (7, "03. Large Losses", "03 Large",
-     ["Year", "Loss Date", "Claim Reference", "Incurred Losses"],
-     ["Currency", "Scale", "Year basis", "Loss basis", "Threshold", "As at"], True),
+     ["Year", "Name of Loss", "Loss amount", "Date of Loss"], ATTRS_03, False),
     (8, "04. Cat Losses", "04 Cat",
      ["Year", "Event Date", "Event Name", "Incurred Losses"],
      ["Currency", "Scale", "Year basis", "Loss basis", "As at"], True),
@@ -108,6 +110,7 @@ for row, sheet, key, headers, attrs, provisional in datasets:
 # ── ⟦GLOBAL⟧
 r = block(ws, 13, "⟦GLOBAL⟧", ["Attribute", "Value"])
 for name, value in [("Actual year", 2025),
+                    ("Treaty type", "Fire"),
                     ("Cedent", "Example Insurance SA"),
                     ("Treaty", "Property per Risk XL")]:
     put(ws, f"B{r}", name, body_f)
@@ -123,7 +126,8 @@ types = [
     ("Year", "text"), ("Premium", "number"), ("Incurred Losses", "number"),
     ("EPI", "number"), ("Band", "text"), ("Number of Risks", "number"),
     ("Sum Insured", "number"), ("Claim Reference", "text"), ("Event Name", "text"),
-    ("Loss Date", "text"), ("Event Date", "text"),
+    ("Name of Loss", "text"), ("Loss amount", "number"),
+    ("Date of Loss", "date"), ("Event Date", "date"),
 ]
 for name, kind in types:
     put(ws, f"B{r}", name, body_f)
@@ -141,6 +145,8 @@ for name, values in [
     ("PF transfer", "with clean cut | without clean cut | none"),
     ("Exposure basis", "Sum Insured | EML | PML | MPL"),
     ("Scale", "1 | 1,000 | 1,000,000"),
+    ("Share basis", "100% | ceded only"),
+    ("Date format", "ISO | DD.MM.YYYY | MM/DD/YYYY"),
     ("Currency", "ISO 4217"),
 ]:
     put(ws, f"B{r}", name, body_f)
@@ -167,6 +173,10 @@ rules = [
      1, "error", "a full-year N in History is an estimate, not an actual"),
     ("R-07", "02 EPI.EPI@{N} re-est", ">=", "02 EPI.EPI@{N} 9 months",
      0, "error", "premium accrues; a re-estimate cannot fall below what is booked"),
+    ("R-01", "SUM(03 Large.Loss amount@{Y})", "<=", "01 History.Incurred Losses@{Y}",
+     1, "error", "large losses cannot exceed total incurred for the same year"),
+    ("R-09", "01 History.Year basis", "=", "03 Large.Year basis",
+     0, "error", "history and large losses must be on the same year basis"),
 ]
 for rid, left, rel, right, tol, sev, note in rules:
     put(ws, f"B{r}", rid, head_f)
@@ -177,9 +187,11 @@ for rid, left, rel, right, tol, sev, note in rules:
     put(ws, f"G{r}", sev, body_f)
     put(ws, f"H{r}", note, sub_f)
     r += 1
-put(ws, f"B{r + 1}", "Form: <key>.<field>@<record>.  {N} resolves from ⟦GLOBAL⟧; records "
-                     "match on leading number, then suffix. A rule is skipped, not "
-                     "guessed, when Premium basis / Currency differ.", sub_f)
+put(ws, f"B{r + 1}", "Forms: <key>.<field>@<record> · <key>.<attribute> · "
+                     "SUM(<key>.<field>@<record>).  {N} resolves from ⟦GLOBAL⟧; {Y} "
+                     "expands the rule once per year. A rule is skipped, not guessed, "
+                     "when a basis or currency differs; it is 'not applicable' when the "
+                     "dataset is absent from this pack.", sub_f)
 
 # ── ⟦MARKERS⟧
 r = block(ws, r + 3, "⟦MARKERS⟧  —  written in column A of every other sheet",
@@ -229,6 +241,7 @@ for row, txt in {
     4: "H_Year basis = UW",
     5: "Premium basis = GNPI",
     6: "H_Loss basis = Incurred",
+    7: "Share basis = 100%",
     8: "Header_1",
     15: "H_PF transfer = with clean cut",
     17: "Info_1 = L",
@@ -292,6 +305,7 @@ for row, txt in {
     6: "Header_1 = C",
     7: "Info_1 = 16",
     8: "Premium basis = GNPI",
+    9: "Share basis = 100%",
     10: "H_Loss basis = Incurred",
     13: "H_PF transfer = with clean cut",
     16: "As at = 31.12.2025",
@@ -358,6 +372,7 @@ for row, txt in {
     3: "Scale = 1,000",
     4: "Premium basis = GNPI",
     5: "H_Year basis = UW",
+    6: "Share basis = 100%",
     8: "Header_1",
     15: "Info_1 = K",
     16: "As at = 31.12.2025",
@@ -367,7 +382,7 @@ for row, txt in {
     c.font = marker_f if txt.startswith(("Header_", "Info_", "Transpose_")) else attr_f
     c.border = box
 
-put(ws, "B6", "Treaty XYZ — Property per Risk XL", Font(name=FONT, size=10, bold=True))
+put(ws, "B12", "Treaty XYZ — Property per Risk XL", Font(name=FONT, size=10, bold=True))
 
 # the sheet's own header, inert — different wording from the declared labels
 for col, txt in zip("BCDE", ["Period", "EPI (net)", "Share %", "Comment"]):
@@ -419,6 +434,7 @@ for row, txt in {
     6: "Header_1 = C",
     7: "Info_1 = 14",
     8: "H_Year basis = UW",
+    9: "Share basis = 100%",
     10: "As at = 31.12.2025",
 }.items():
     c = ws.cell(row=row, column=1, value=txt)
@@ -460,6 +476,81 @@ ws.column_dimensions["B"].width = 14
 ws.column_dimensions["C"].width = 14
 for col in "DEFGH":
     ws.column_dimensions[col].width = 17
+
+# ══════════════════════════════════════════════════ 03. Large Losses
+ws = wb.create_sheet("03. Large Losses")
+
+# 2022 deliberately has no large loss: the annual table must show it as 0.
+losses = [
+    ("2021", "Warehouse fire, Lyon",        1850, date(2021, 3, 14)),
+    ("2021", "Machinery breakdown, Hamburg", 920, date(2021, 9, 2)),
+    ("2023", "Factory fire, Rotterdam",     3400, date(2023, 1, 27)),
+    ("2023", "Explosion, Antwerp",          1150, date(2023, 6, 15)),
+    ("2023", "Storm damage, Bremen",         780, date(2023, 11, 8)),
+    ("2024", "Chemical plant fire, Basel",  2600, date(2024, 5, 19)),
+    ("2025", "Cold store collapse, Milan",  1420, date(2025, 2, 11)),
+    ("2025", "Transformer fire, Porto",      640, date(2025, 8, 23)),
+]
+
+put(ws, "B1", "03. Large Losses — individual claims above the threshold", title_f)
+
+for row, txt in {
+    2: "Currency = USD",
+    3: "Scale = 1,000",
+    4: "Share basis = 100%",
+    5: "H_Year basis = UW",
+    6: "H_Loss basis = Incurred",
+    7: "Threshold = 500",
+    8: "Date format = ISO",
+    10: "Header_1",
+    21: "Info_1 = J",
+    22: "As at = 31.12.2025",
+}.items():
+    c = ws.cell(row=row, column=1, value=txt)
+    c.fill = yellow
+    c.font = marker_f if txt.startswith(("Header_", "Info_", "Transpose_")) else attr_f
+    c.border = box
+
+put(ws, "B9", "Claim no.", inert_f)
+put(ws, "C9", "U/W Yr", inert_f)
+put(ws, "D9", "Description", inert_f)
+put(ws, "E9", "Gross incurred", inert_f)
+put(ws, "F9", "Occurred", inert_f)
+put(ws, "G9", "← source header, never read", sub_f)
+
+for col, txt in [("C", "Year"), ("D", "Name of Loss"),
+                 ("E", "Loss amount"), ("F", "Date of Loss")]:
+    put(ws, f"{col}10", txt, head_f, blue).border = box
+put(ws, "G10", "← extraction row: the claim number is not declared in 00", sub_f)
+
+for i, (year, name, amount, when) in enumerate(losses):
+    row = 11 + i
+    put(ws, f"B{row}", f"CL-{2100 + i}", body_f)
+    put(ws, f"C{row}", year, body_f, fmt="@")
+    put(ws, f"D{row}", name, body_f)
+    put(ws, f"E{row}", amount, body_f, fmt="#,##0")
+    put(ws, f"F{row}", when, body_f, fmt="yyyy-mm-dd")
+    sel = ws.cell(row=row, column=10, value="=ROW()")        # column J
+    sel.font, sel.fill, sel.border = body_f, green, box
+
+total_row = 11 + len(losses)
+put(ws, f"C{total_row}", "Total", head_f)
+c = ws.cell(row=total_row, column=5, value=f"=SUM(E11:E{total_row - 1})")
+c.font, c.number_format = head_f, "#,##0"
+put(ws, f"G{total_row}", "← selector empty: excluded, reused as control", sub_f)
+
+put(ws, "B24", "2022 has no large loss. The annual table in step 2 shows it as 0, "
+               "because an absent year reads as 'no data' rather than 'nothing happened'.",
+    sub_f)
+
+ws.column_dimensions["A"].width = 30
+ws.column_dimensions["B"].width = 12
+ws.column_dimensions["C"].width = 10
+ws.column_dimensions["D"].width = 30
+ws.column_dimensions["E"].width = 14
+ws.column_dimensions["F"].width = 14
+ws.column_dimensions["G"].width = 46
+ws.column_dimensions["J"].width = 10
 
 wb.save(OUT)
 print("written:", OUT)

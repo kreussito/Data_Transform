@@ -42,6 +42,21 @@ class DerivedFigure:
 
 
 @dataclass(frozen=True)
+class AggregateSpec:
+    """A second step-2 table: group by a key, sum measures — spec §9.2.1 S14.
+
+    ``zero_fill_from`` names a dataset whose year window the table should span, so a
+    year with no records shows 0 rather than being absent. A missing year reads as
+    "no data"; a zero reads as "nothing happened", and only one of those is true.
+    """
+
+    title: str
+    group_by: str
+    measures: tuple[str, ...]
+    zero_fill_from: str | None = None
+
+
+@dataclass(frozen=True)
 class Step2Spec:
     """Step-2 mechanics.
 
@@ -54,6 +69,7 @@ class Step2Spec:
     ascending: bool = True
     calculations: tuple[Calculation, ...] = field(default_factory=tuple)
     figures: tuple[DerivedFigure, ...] = field(default_factory=tuple)
+    aggregate: AggregateSpec | None = None
 
 
 STEP2: dict[str, Step2Spec] = {
@@ -88,6 +104,16 @@ STEP2: dict[str, Step2Spec] = {
                 field="EPI",
                 note="cross-check against rate development and exposure growth",
             ),
+        ),
+    ),
+    "03 Large": Step2Spec(
+        sort_by=("Year", "Date of Loss"),
+        ascending=True,
+        aggregate=AggregateSpec(
+            title="Annual sum of large losses",
+            group_by="Year",
+            measures=("Loss amount",),
+            zero_fill_from="01 History",
         ),
     ),
 }

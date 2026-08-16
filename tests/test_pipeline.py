@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import shutil
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
 from openpyxl import load_workbook
 
-from datatransform.coerce import to_number, to_text
+from datatransform.coerce import to_date, to_number, to_text
 from datatransform.crosschecks import (
     hypotheses_from,
     match_record,
@@ -24,6 +24,7 @@ from datatransform.model import (
     FieldType,
     Orientation,
     Rule,
+    parse_reference,
 )
 from datatransform.nomenclature import match_sheet, norm, read_nomenclature, sheet_sort_key
 from datatransform.runner import run
@@ -670,7 +671,7 @@ def test_dataset_register_stops_at_the_next_block(nomenclature):
 
 def test_rules_are_read_from_sheet_00(nomenclature):
     ids = [r.id for r in nomenclature.rules]
-    assert ids == ["R-05", "R-06", "R-07"]
+    assert ids == ["R-05", "R-06", "R-07", "R-01", "R-09"]
     r5 = nomenclature.rules[0]
     assert Rule.parse_ref(r5.left) == ("01 History", "Premium", "{N} 9 months")
     assert r5.relation == "=" and r5.tolerance == 1.0 and r5.severity == "error"
@@ -753,17 +754,17 @@ def test_figures_need_N(books, nomenclature):
 
 # ───────────────────────────────────────────────── crosschecks
 
-def _blocks(books, nomenclature):
+def _blocks(books, nomenclature, sheets=(ROW_WISE, EPI, "03. Large Losses")):
     return {
         b.dataset.key: b
-        for sheet in (ROW_WISE, EPI)
+        for sheet in sheets
         for b in [_block(books, nomenclature, sheet)]
     }
 
 
 def test_all_declared_rules_pass_on_the_reference_workbook(books, nomenclature):
     results = run_rules(nomenclature, _blocks(books, nomenclature))
-    assert [r.status for r in results] == ["passed"] * 3
+    assert {r.status for r in results} == {"passed"}
     assert results[0].left_value == results[0].right_value == 14400.0
     assert results[1].left_value == results[1].right_value == 19200.0
 
@@ -798,14 +799,18 @@ def test_scale_is_normalised_before_comparing(books, nomenclature):
     for record in epi.records:
         record.values["EPI"] *= 1000
     results = run_rules(nomenclature, blocks)
-    assert [r.status for r in results] == ["passed"] * 3
+    assert {r.status for r in results} == {"passed"}
 
 
-def test_a_missing_dataset_skips_rather_than_fails(books, nomenclature):
+def test_a_missing_dataset_is_not_applicable_rather_than_a_failure(books, nomenclature):
+    """A pack without that sheet is structure, not a problem — spec §10.1."""
     blocks = {"02 EPI": _block(books, nomenclature, EPI)}
     results = run_rules(nomenclature, blocks)
-    assert results[0].status == "skipped" and "not extracted" in results[0].detail
-    assert results[2].status == "passed"          # R-07 is within 02 alone
+    by_id = {r.rule.id: r for r in results}
+    assert by_id["R-05"].status == "not applicable"
+    assert "not in this pack" in by_id["R-05"].detail
+    assert by_id["R-07"].status == "passed"       # R-07 is within 02 alone
+    assert hypotheses_from(results, "02 EPI") == []
 
 
 def test_failed_and_skipped_rules_become_questions(books, nomenclature):
@@ -847,6 +852,7 @@ def test_derived_figures_are_written_to_the_sheet(workspace, tmp_path):
 # ════════════════════════════════════ ⟦PERIOD ORDER⟧ · transposed 02
 
 EPI_T = "02. EPI Projections_Transposed"
+LARGE = "03. Large Losses"
 
 
 def test_period_order_is_read_from_sheet_00(nomenclature):
@@ -930,11 +936,244 @@ def test_record_matching_works_transposed(books, nomenclature):
     assert match_record(b, "{N+1}", 2025).values["EPI"] == 20900.0
 
 
-def test_all_four_data_sheets_process(workspace, tmp_path):
+def test_all_data_sheets_process(workspace, tmp_path):
     out = tmp_path / "out.xlsx"
     report = run(workspace, out, tmp_path / "logs")
     assert report.ok and report.rules_ok
     processed = {o.sheet: o.detail for o in report.outcomes if o.status == "processed"}
-    assert set(processed) == {ROW_WISE, TRANSPOSED, EPI, EPI_T}
+    assert set(processed) == {ROW_WISE, TRANSPOSED, EPI, EPI_T, LARGE}
     assert processed[EPI] == processed[EPI_T] == "1 block(s), 4 record(s)"
     assert processed[ROW_WISE] == processed[TRANSPOSED] == "1 block(s), 6 record(s)"
+
+
+# ══════════════════════════════════ 03. Large Losses · dates · aggregation
+
+LOSS_TOTAL = 12760.0
+ANNUAL = [("2021", 2770.0), ("2022", 0.0), ("2023", 5330.0),
+          ("2024", 2600.0), ("2025", 2060.0)]
+
+
+def test_date_type_is_declared_in_sheet_00(nomenclature):
+    assert nomenclature.type_of("Date of Loss") is FieldType.DATE
+    assert FieldType.DATE.number_format == "yyyy-mm-dd"
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("2023-06-15", date(2023, 6, 15)),
+    ("2023/06/15", date(2023, 6, 15)),
+    ("15.06.2023", date(2023, 6, 15)),      # 15 cannot be a month
+    ("15/06/2023", date(2023, 6, 15)),
+    (datetime(2024, 5, 19, 0, 0), date(2024, 5, 19)),
+    (date(2024, 5, 19), date(2024, 5, 19)),
+    (None, None),
+    ("", None),
+])
+def test_date_coercion(raw, expected):
+    assert to_date(raw, "Date of Loss", "F11", []) == expected
+
+
+def test_ambiguous_date_is_fatal():
+    """01/02/2025 is 1 February or 2 January — never guess."""
+    with pytest.raises(ExtractionError, match="ambiguous"):
+        to_date("01/02/2025", "Date of Loss", "F11", [])
+
+
+def test_a_declared_date_format_resolves_the_ambiguity():
+    assert to_date("01/02/2025", "Date of Loss", "F11", [], "DD.MM.YYYY") == date(2025, 2, 1)
+    assert to_date("01/02/2025", "Date of Loss", "F11", [], "MM/DD/YYYY") == date(2025, 1, 2)
+
+
+def test_impossible_date_is_fatal():
+    with pytest.raises(ExtractionError, match="not a real date"):
+        to_date("2023-02-30", "Date of Loss", "F11", [])
+
+
+def test_large_losses_extraction(books, nomenclature):
+    b = _block(books, nomenclature, LARGE)
+    assert b.address_map == {"Year": "C", "Name of Loss": "D",
+                             "Loss amount": "E", "Date of Loss": "F"}
+    assert (b.candidates, len(b.records), b.excluded) == (9, 8, 1)
+    assert b.numeric_fields == ("Loss amount",)          # the date is never summed
+    assert b.totals()["Loss amount"] == LOSS_TOTAL
+    first = b.records[0].values
+    assert first["Year"] == "2021"
+    assert first["Name of Loss"] == "Warehouse fire, Lyon"
+    assert first["Date of Loss"] == date(2021, 3, 14)
+
+
+def test_many_claims_in_one_year_is_not_a_period_overlap(books, nomenclature):
+    """Eight losses across four years are claims, not overlapping periods."""
+    b = _block(books, nomenclature, LARGE)
+    assert not [h for h in b.hypotheses if h.attribute.startswith("Period overlap")]
+
+    history = _block(books, nomenclature, ROW_WISE)      # but a real overlap still fires
+    assert [h.attribute for h in history.hypotheses
+            if h.attribute.startswith("Period overlap")] == ["Period overlap 2025"]
+
+
+# ───────────────────────────────────────────────── aggregation
+
+def _step2_large(books, nomenclature):
+    b = _block(books, nomenclature, LARGE)
+    return b, apply_step2(b, step2_for(b.dataset.key), nomenclature,
+                          _blocks(books, nomenclature))
+
+
+def test_aggregate_groups_by_year_and_sums(books, nomenclature):
+    _, result = _step2_large(books, nomenclature)
+    table = result.aggregate
+    assert table.title == "Annual sum of large losses"
+    assert [(k, v["Loss amount"]) for k, v in table.rows] == ANNUAL
+
+
+def test_a_year_without_losses_shows_zero(books, nomenclature):
+    """Absent reads as 'no data'; 0 reads as 'nothing happened'."""
+    _, result = _step2_large(books, nomenclature)
+    assert result.aggregate.zero_filled == ["2022"]
+    assert dict(result.aggregate.rows)["2022"]["Loss amount"] == 0.0
+
+
+def test_aggregate_total_ties_to_the_detail(books, nomenclature):
+    _, result = _step2_large(books, nomenclature)
+    assert result.aggregate.totals()["Loss amount"] == result.totals()["Loss amount"]
+    assert result.aggregate.totals()["Loss amount"] == LOSS_TOTAL
+
+
+def test_grouping_that_loses_records_is_fatal(books, nomenclature, monkeypatch):
+    from datatransform import transform as tmod
+
+    b = _block(books, nomenclature, LARGE)
+    real = tmod._aggregate
+    monkeypatch.setattr(tmod, "_aggregate",
+                        lambda blk, spec, blocks: _drop_row(real(blk, spec, blocks)))
+    with pytest.raises(ExtractionError, match="grouping lost records"):
+        apply_step2(b, step2_for(b.dataset.key), nomenclature, _blocks(books, nomenclature))
+
+
+def _drop_row(table):
+    table.rows = table.rows[:-1]
+    return table
+
+
+def test_detail_sorts_by_year_then_date(books, nomenclature):
+    _, result = _step2_large(books, nomenclature)
+    dates = [r.values["Date of Loss"] for r in result.records]
+    assert dates == sorted(dates)
+
+
+# ───────────────────────────────────────── reference grammar & rules
+
+@pytest.mark.parametrize("ref,key,name,record,agg", [
+    ("01 History.Premium@{N}", "01 History", "Premium", "{N}", None),
+    ("01 History.Year basis", "01 History", "Year basis", None, None),
+    ("SUM(03 Large.Loss amount@{Y})", "03 Large", "Loss amount", "{Y}", "SUM"),
+])
+def test_reference_forms(ref, key, name, record, agg):
+    r = parse_reference(ref)
+    assert (r.dataset_key, r.name, r.record, r.aggregate) == (key, name, record, agg)
+    assert r.is_attribute == (record is None)
+
+
+def test_a_malformed_reference_is_fatal():
+    with pytest.raises(ExtractionError, match="is not of the form"):
+        parse_reference("nonsense")
+
+
+def test_attribute_rule_compares_year_basis(books, nomenclature):
+    results = run_rules(nomenclature, _blocks(books, nomenclature))
+    r9 = next(r for r in results if r.rule.id == "R-09")
+    assert r9.status == "passed" and r9.detail == "UW = UW"
+
+
+def test_a_differing_year_basis_fails_the_attribute_rule(books, nomenclature):
+    from datatransform.model import Attribute
+
+    blocks = _blocks(books, nomenclature)
+    blocks["03 Large"].attributes["Year basis"] = Attribute("Year basis", "Occurrence", True, 5)
+    results = run_rules(nomenclature, blocks)
+    r9 = next(r for r in results if r.rule.id == "R-09")
+    assert r9.status == "failed" and r9.detail == "UW = Occurrence"
+
+
+def test_year_wildcard_expands_one_rule_per_year(books, nomenclature):
+    results = run_rules(nomenclature, _blocks(books, nomenclature))
+    r1 = [r for r in results if r.rule.id == "R-01"]
+    assert [r.year for r in r1] == [2021, 2023, 2024, 2025]
+    assert [r.label for r in r1] == ["R-01/2021", "R-01/2023", "R-01/2024", "R-01/2025"]
+    assert all(r.status == "passed" for r in r1)
+
+
+def test_sum_aggregates_the_years_losses(books, nomenclature):
+    results = run_rules(nomenclature, _blocks(books, nomenclature))
+    r2023 = next(r for r in results if r.rule.id == "R-01" and r.year == 2023)
+    assert r2023.left_value == 5330.0            # three losses summed
+    assert r2023.right_value == 12660.0
+
+
+def test_large_losses_exceeding_incurred_fails(books, nomenclature):
+    blocks = _blocks(books, nomenclature)
+    for record in blocks["03 Large"].records:
+        record.values["Loss amount"] *= 10
+    results = run_rules(nomenclature, blocks)
+    failed = [r for r in results if r.status == "failed"]
+    assert [r.label for r in failed] == ["R-01/2021", "R-01/2023", "R-01/2024", "R-01/2025"]
+    assert hypotheses_from(results, "03 Large")[0].confidence is Confidence.OPEN
+
+
+def test_differing_share_basis_skips_the_comparison(books, nomenclature):
+    from datatransform.model import Attribute
+
+    blocks = _blocks(books, nomenclature)
+    blocks["03 Large"].attributes["Share basis"] = Attribute("Share basis", "ceded only", False, 4)
+    results = run_rules(nomenclature, blocks)
+    r1 = next(r for r in results if r.rule.id == "R-01")
+    assert r1.status == "skipped"
+    assert "Share basis differs (ceded only vs 100%)" in r1.detail   # 03 is the left side
+
+
+# ───────────────────────────────────── occurrence-year consistency
+
+def test_occurrence_basis_flags_a_year_that_disagrees_with_the_date(books, nomenclature):
+    from datatransform.extract import _check_occurrence_year
+    from datatransform.model import Attribute
+
+    b = _block(books, nomenclature, LARGE)
+    b.attributes["Year basis"] = Attribute("Year basis", "Occurrence", True, 5)
+    b.records[0].values["Year"] = "2019"          # date is 2021-03-14
+    b.hypotheses.clear()
+    _check_occurrence_year(b)
+    assert len(b.hypotheses) == 1
+    assert b.hypotheses[0].attribute == "Occurrence year mismatch"
+    assert b.hypotheses[0].confidence is Confidence.OPEN
+
+
+def test_underwriting_basis_stays_silent(books, nomenclature):
+    """Under a UW basis a loss may legitimately fall in a later year."""
+    from datatransform.extract import _check_occurrence_year
+
+    b = _block(books, nomenclature, LARGE)
+    b.records[0].values["Year"] = "2019"
+    b.hypotheses.clear()
+    _check_occurrence_year(b)                     # declared basis is UW
+    assert b.hypotheses == []
+
+
+def test_aggregate_reaches_the_written_sheet(workspace, tmp_path):
+    out = tmp_path / "out.xlsx"
+    report = run(workspace, out, tmp_path / "logs")
+    assert report.ok and report.rules_ok
+
+    ws = load_workbook(out, data_only=True)[LARGE]
+    text = [c.value for row in ws.iter_rows() for c in row if isinstance(c.value, str)]
+    assert "Annual sum of large losses" in text
+    assert any("shown as 0: 2022" in t for t in text)
+    assert any(t.startswith("R-01/2021") for t in text)
+
+
+def test_dates_are_written_as_dates(workspace, tmp_path):
+    out = tmp_path / "out.xlsx"
+    run(workspace, out, tmp_path / "logs")
+    ws = load_workbook(out, data_only=True)[LARGE]
+    written = [c for row in ws.iter_rows() for c in row
+               if isinstance(c.value, datetime) and c.number_format == "yyyy-mm-dd"]
+    assert len(written) == 24            # eight losses × source, step 1 and step 2

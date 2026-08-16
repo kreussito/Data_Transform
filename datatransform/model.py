@@ -22,10 +22,15 @@ class FieldType(str, Enum):
 
     TEXT = "text"
     NUMBER = "number"
+    DATE = "date"
 
     @property
     def number_format(self) -> str:
-        return "@" if self is FieldType.TEXT else "#,##0"
+        return {
+            FieldType.TEXT: "@",
+            FieldType.NUMBER: "#,##0",
+            FieldType.DATE: "yyyy-mm-dd",
+        }[self]
 
     @classmethod
     def parse(cls, text: str) -> "FieldType":
@@ -164,12 +169,71 @@ class Block:
 
 
 @dataclass(frozen=True)
-class Rule:
-    """One row of ⟦RULES⟧ in sheet 00 — spec §10.1.
+class Reference:
+    """One side of a rule — spec §10.1.
 
-    ``left`` and ``right`` are ``<dataset key>.<field>@<record>`` references; ``{N}``
-    and ``{N+1}`` resolve from ⟦GLOBAL⟧'s ``Actual year``.
+    Three forms, distinguished by shape alone:
+
+    ==================================== ==========================================
+    ``01 History.Premium@{N}``           a field on the record matching ``{N}``
+    ``01 History.Year basis``            an *attribute* of the sheet — no record
+    ``SUM(03 Large.Loss amount@{Y})``    the field summed over every matching record
+    ==================================== ==========================================
+
+    ``{N}`` and ``{N+1}`` resolve from ⟦GLOBAL⟧; ``{Y}`` is a wildcard that expands
+    the rule once per year present in the data.
     """
+
+    dataset_key: str
+    name: str
+    record: str | None = None
+    aggregate: str | None = None
+
+    @property
+    def is_attribute(self) -> bool:
+        return self.record is None
+
+    def with_record(self, record: str) -> "Reference":
+        return Reference(self.dataset_key, self.name, record, self.aggregate)
+
+    def render(self) -> str:
+        inner = f"{self.dataset_key}.{self.name}"
+        if self.record is not None:
+            inner += f"@{self.record}"
+        return f"{self.aggregate}({inner})" if self.aggregate else inner
+
+
+AGGREGATES = ("SUM",)
+
+
+def parse_reference(ref: str) -> Reference:
+    text = str(ref).strip()
+
+    aggregate = None
+    for name in AGGREGATES:
+        if text.upper().startswith(name + "(") and text.endswith(")"):
+            aggregate, text = name, text[len(name) + 1:-1].strip()
+            break
+
+    head, sep, record = text.partition("@")
+    key, dot, field = head.rpartition(".")
+    if not key or not dot or not field:
+        raise ExtractionError(
+            f"sheet 00 ⟦RULES⟧: {ref!r} is not of the form <dataset key>.<field>@<record>, "
+            f"<dataset key>.<attribute>, or SUM(<dataset key>.<field>@<record>)"
+        )
+    if sep and not record.strip():
+        raise ExtractionError(f"sheet 00 ⟦RULES⟧: {ref!r} has an empty record selector")
+    if aggregate and not sep:
+        raise ExtractionError(f"sheet 00 ⟦RULES⟧: {ref!r} aggregates but names no record")
+
+    return Reference(key.strip(), field.strip(),
+                     record.strip() if sep else None, aggregate)
+
+
+@dataclass(frozen=True)
+class Rule:
+    """One row of ⟦RULES⟧ in sheet 00 — spec §10.1."""
 
     id: str
     left: str
@@ -179,16 +243,19 @@ class Rule:
     severity: str
     note: str = ""
 
+    @property
+    def left_ref(self) -> Reference:
+        return parse_reference(self.left)
+
+    @property
+    def right_ref(self) -> Reference:
+        return parse_reference(self.right)
+
     @staticmethod
     def parse_ref(ref: str) -> tuple[str, str, str]:
-        head, _, record = ref.partition("@")
-        key, _, field = head.rpartition(".")
-        if not key or not field or not record:
-            raise ExtractionError(
-                f"sheet 00 ⟦RULES⟧: {ref!r} is not of the form "
-                f"<dataset key>.<field>@<record>"
-            )
-        return key.strip(), field.strip(), record.strip()
+        """Backwards-compatible tuple view."""
+        r = parse_reference(ref)
+        return r.dataset_key, r.name, r.record or ""
 
 
 @dataclass
@@ -196,14 +263,19 @@ class RuleResult:
     """The outcome of evaluating a Rule — spec §10.1."""
 
     rule: Rule
-    status: str                      # passed | failed | skipped
+    status: str                # passed | failed | skipped | not applicable
     detail: str
     left_value: float | None = None
     right_value: float | None = None
+    year: int | None = None    # set when a {Y} rule was expanded
 
     @property
     def ok(self) -> bool:
         return self.status != "failed"
+
+    @property
+    def label(self) -> str:
+        return f"{self.rule.id}/{self.year}" if self.year is not None else self.rule.id
 
 
 class ExtractionError(Exception):

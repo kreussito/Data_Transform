@@ -155,11 +155,88 @@ def _to_float(text: str, field: str, ref: str, raw: str) -> float:
         ) from None
 
 
-COERCERS = {
-    FieldType.TEXT: to_text,
-    FieldType.NUMBER: to_number,
+
+
+
+ISO_DATE = re.compile(r"^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$")
+DMY_DATE = re.compile(r"^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$")
+
+DATE_FORMATS = {
+    "iso": "YMD",
+    "yyyy-mm-dd": "YMD",
+    "dd.mm.yyyy": "DMY",
+    "dd/mm/yyyy": "DMY",
+    "mm/dd/yyyy": "MDY",
+    "mm.dd.yyyy": "MDY",
 }
 
 
-def coerce(value, field_type: FieldType, field: str, ref: str, log: list):
+def to_date(value, field: str, ref: str, log: list, declared_format: str | None = None):
+    """Read a date, refusing to guess an ambiguous one — spec §8.4.
+
+    ``01/02/2025`` is 1 February under one convention and 2 January under another.
+    Where the form cannot decide it, the sheet must declare ``Date format``; guessing
+    would silently move a loss between years.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, bool):
+        raise ExtractionError(f"{field} at {ref}: boolean {value!r} cannot be read as a date")
+
+    raw = str(value).strip()
+    order = DATE_FORMATS.get((declared_format or "").strip().casefold())
+
+    iso = ISO_DATE.match(raw)
+    if iso:
+        parsed = _build_date(int(iso.group(1)), int(iso.group(2)), int(iso.group(3)),
+                             field, ref, raw)
+        if raw != parsed.isoformat():
+            log.append(Coercion(field, ref, raw, parsed.isoformat(),
+                                "date normalised to YYYY-MM-DD"))
+        return parsed
+
+    dmy = DMY_DATE.match(raw)
+    if dmy:
+        first, second, year = int(dmy.group(1)), int(dmy.group(2)), int(dmy.group(3))
+        if order == "DMY" or (order is None and first > 12):
+            day, month = first, second
+        elif order == "MDY" or (order is None and second > 12):
+            month, day = first, second
+        else:
+            raise ExtractionError(
+                f"{field} at {ref}: {raw!r} is ambiguous — it could be "
+                f"{second:02d}-{first:02d} or {first:02d}-{second:02d}. Declare "
+                f"'Date format' in column A, or write the date as YYYY-MM-DD."
+            )
+        parsed = _build_date(year, month, day, field, ref, raw)
+        log.append(Coercion(field, ref, raw, parsed.isoformat(),
+                            "text cell read as a date"))
+        return parsed
+
+    raise ExtractionError(f"{field} at {ref}: {raw!r} cannot be read as a date")
+
+
+def _build_date(year: int, month: int, day: int, field: str, ref: str, raw: str) -> date:
+    try:
+        return date(year, month, day)
+    except ValueError as exc:
+        raise ExtractionError(f"{field} at {ref}: {raw!r} is not a real date ({exc})") from None
+
+
+COERCERS = {
+    FieldType.TEXT: to_text,
+    FieldType.NUMBER: to_number,
+    FieldType.DATE: to_date,
+}
+
+
+def coerce(value, field_type: FieldType, field: str, ref: str, log: list,
+           date_format: str | None = None):
+    if field_type is FieldType.DATE:
+        return to_date(value, field, ref, log, date_format)
     return COERCERS[field_type](value, field, ref, log)

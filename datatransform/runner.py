@@ -167,7 +167,8 @@ def run(source: str | Path, output: str | Path | None = None,
 
     # Pass 2 — transform and write.
     for outcome in report.outcomes:
-        _write_sheet(outcome, out_wb, nomenclature, debug, process, formula_values)
+        _write_sheet(outcome, out_wb, nomenclature, blocks,
+                     debug, process, formula_values)
 
     out_wb.save(output)
     result = inject(output, formula_values)
@@ -214,7 +215,8 @@ def _extract_sheet_outcome(title, values_wb, formulas_wb, nomenclature,
     return outcome
 
 
-def _write_sheet(outcome, out_wb, nomenclature, debug, process, formula_values) -> None:
+def _write_sheet(outcome, out_wb, nomenclature, blocks,
+                 debug, process, formula_values) -> None:
     for block in outcome.blocks:
         spec = step2_for(block.dataset.key)
         if spec is None:
@@ -223,7 +225,7 @@ def _write_sheet(outcome, out_wb, nomenclature, debug, process, formula_values) 
             process.info("%s — no step-2 spec for %s", outcome.sheet, block.dataset.key)
             continue
 
-        result = apply_step2(block, spec, nomenclature)
+        result = apply_step2(block, spec, nomenclature, blocks)
         formula_values.extend(write_blocks(out_wb[outcome.sheet], block, result))
         outcome.results.append(result)
         _log_block(block, result, debug, process)
@@ -235,10 +237,10 @@ def _log_rules(results, nomenclature, debug, process) -> None:
     process.info("")
     process.info("Crosschecks (⟦RULES⟧ of sheet 00, N = %s)", nomenclature.actual_year)
     for r in results:
-        process.info("  %-6s %-8s %s %s %s — %s",
-                     r.rule.id, r.status.upper(), r.rule.left, r.rule.relation,
+        process.info("  %-11s %-15s %s %s %s — %s",
+                     r.label, r.status.upper(), r.rule.left, r.rule.relation,
                      r.rule.right, r.detail)
-        debug.info("rule %s: %s (%s)", r.rule.id, r.status, r.detail)
+        debug.info("rule %s: %s (%s)", r.label, r.status, r.detail)
 
 
 def _log_block(block: Block, result: Step2Result, debug, process):

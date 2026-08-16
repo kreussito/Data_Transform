@@ -6,7 +6,7 @@ Excel, driven by metadata declared in the workbook itself.
 | | |
 |---|---|
 | **Version** | 1 |
-| **Status** | `00`, `01` and `02` implemented; sheets `03`–`10` not yet specified |
+| **Status** | `00`–`03` implemented for per-risk treaties; sections and `04`–`10` outstanding |
 | **Cadence** | Once per treaty, per year |
 | **Reference workbook** | `Intake_v1.xlsx` |
 
@@ -157,8 +157,9 @@ Attributes now resolve in **three tiers**, each overriding the one above:
 | Field | Type |
 |---|---|
 | `Year` | text |
-| `Premium` · `Incurred Losses` · `EPI` · `Number of Risks` · `Sum Insured` | number |
-| `Band` · `Claim Reference` · `Event Name` · `Loss Date` · `Event Date` | text |
+| `Premium` · `Incurred Losses` · `EPI` · `Loss amount` · `Sum Insured` | number |
+| `Name of Loss` · `Band` · `Event Name` · `Claim Reference` | text |
+| `Date of Loss` · `Event Date` | **date** |
 
 **A field name carries one type across the whole workbook** — which is precisely what a
 nomenclature is for. A declared field with no entry here is an error; nothing is
@@ -436,6 +437,11 @@ summed. Only fields typed `number` enter a control sum.
 They are declared in **`⟦TYPES⟧` of sheet 00**, by field name, so the frame states both
 what a field is called and how it is read.
 
+**Dates** follow the same principle. `2023-06-15`, `15.06.2023` and a real Excel date
+cell all read; `01/02/2025` does **not**, because it is 1 February or 2 January
+depending on convention and guessing moves a loss between years. A sheet resolves it by
+declaring `Date format`. Dates are written as dates, formatted `yyyy-mm-dd`.
+
 **Two rules govern every conversion:**
 
 1. **Empty stays empty.** `None` is an absence, not a zero. Zero is a claim about the
@@ -509,6 +515,28 @@ sums tying back to step 1.
 | **S11** | **Step 1 carries only extracted information.** Every computed figure belongs to step 2 | — |
 | **S12** | Figures relating *two records* are written as **block-level derived figures** beneath the data, not as columns | value-adding |
 | **S13** | Within one leading number, suffixes sort by the rank declared in `⟦PERIOD ORDER⟧`, not alphabetically | value-preserving |
+| **S14** | A dataset may declare an **aggregate table**: a second step-2 table grouping the detail and summing its measures | value-preserving |
+
+**S14.** `03. Large Losses` emits the claim detail and then, beneath it, the annual sum:
+
+```
+Annual sum of large losses
+Years with no record are shown as 0: 2022
+  Year   Loss amount
+  2021         2,770
+  2022             0      ← no large loss that year
+  2023         5,330
+  2024         2,600
+  2025         2,060
+  Control (n = 5)  12,760  — must equal the detail total
+```
+
+The zero row matters: **an absent year reads as "no data", a zero reads as "nothing
+happened"**, and only one of those is true. The window comes from `01. History`, so
+every year of the history has a counterpart here. Grouping is value-preserving, so the
+aggregate total must equal the detail total or the run fails.
+
+The aggregate also makes R-01 expressible — see §10.1.
 
 **S11.** A reviewer must be able to compare step 1 against the source cell by cell with
 nothing interposed. Step 1's control sums are not an exception: they *verify the
@@ -608,15 +636,24 @@ require an explained delta.
 
 Declared in `⟦RULES⟧` of sheet 00, in condensed form:
 
-```
-<dataset key>.<field>@<record>   <rel>   <dataset key>.<field>@<record>
-```
+Each side takes one of three forms, distinguished by shape alone:
+
+| Form | Meaning |
+|---|---|
+| `01 History.Premium@{N}` | a field on the record matching `{N}` |
+| `01 History.Year basis` | an **attribute** of the sheet — no record selector |
+| `SUM(03 Large.Loss amount@{Y})` | the field **summed** over every matching record |
+
+`{N}` and `{N+1}` resolve from `⟦GLOBAL⟧`. `{Y}` is a **wildcard**: the rule is declared
+once and evaluated once per year present in the data, reported as `R-01/2023`.
 
 | ID | Left | Rel | Right | Tol | Severity |
 |---|---|---|---|---|---|
 | R-05 | `01 History.Premium@{N} 9 months` | `=` | `02 EPI.EPI@{N} 9 months` | 1 | error |
 | R-06 | `01 History.Premium@{N}` | `=` | `02 EPI.EPI@{N} re-est` | 1 | error |
 | R-07 | `02 EPI.EPI@{N} re-est` | `>=` | `02 EPI.EPI@{N} 9 months` | 0 | error |
+| R-01 | `SUM(03 Large.Loss amount@{Y})` | `<=` | `01 History.Incurred Losses@{Y}` | 1 | error |
+| R-09 | `01 History.Year basis` | `=` | `03 Large.Year basis` | 0 | error |
 
 R-05 is the strongest tie: the same nine months of the same year, reported in two
 sheets. R-06 catches an estimate masquerading as an actual — a full-year figure for N in
@@ -632,8 +669,10 @@ records share a year, the suffix must match exactly. No label is ever rewritten.
 
 #### Attribute compatibility is a precondition, not part of the comparison
 
-Before any rule is evaluated, `Premium basis`, `Loss basis` and `Currency` must agree on
-both sides. `Scale` is normalised — the comparison happens in the left block's scale.
+Before any rule is evaluated, `Premium basis`, `Loss basis`, `Share basis` and
+`Currency` must agree on both sides. `Share basis` is `100%` (cession plus retention)
+or `ceded only`; comparing a 100% loss against a ceded premium is the same class of
+error as GWP against GNPI. `Scale` is normalised — the comparison happens in the left block's scale.
 
 Where a basis or currency differs, **the rule is not evaluated**. It is reported as
 *skipped*, with the reason, and raises a question. Quietly comparing GWP against GNPI
@@ -642,16 +681,35 @@ would be worse than not checking at all.
 A rule that fails or is skipped becomes a hypothesis in the step-1 block of **both**
 sheets it names, so a reviewer reading either one sees the tie.
 
+#### Four outcomes, not two
+
+| | Meaning |
+|---|---|
+| `passed` / `failed` | evaluated |
+| `not applicable` | the dataset is absent from this pack — structure, not a problem. Raises nothing |
+| `skipped` | it should apply but could not be evaluated — **a question** |
+
+The distinction matters: a Nat Cat treaty has no `03`, so R-01 and R-09 are *not
+applicable* and stay silent, rather than filling the log with complaints about a sheet
+that correctly does not exist.
+
+### 10.2 Occurrence-year consistency
+
+Where `Year basis = Occurrence`, the year must equal the year of the loss date — a loss
+dated `2023-06-15` cannot sit in the `2022` row. Under an **underwriting** basis it
+legitimately can, because a policy incepting in one year produces losses in the next.
+
+So the check runs only where the declared basis makes it meaningful, and stays silent
+otherwise. A tool that flagged this under a UW basis would be wrong, not thorough.
+
 #### Still to be declared
 
 | Rule | Left | Right | Relation |
 |---|---|---|---|
-| R-01 | Σ `03` Large Losses, year *y* | `01` Incurred Losses, year *y* | ≤ |
 | R-02 | Σ `04` Cat Losses, year *y* | `01` Incurred Losses, year *y* | ≤ |
 | R-03 | `10` Triangles latest diagonal, year *y* | `01` Incurred Losses, year *y* | = |
 | R-08 | `02` EPI `{N} est` | last year's pack, same label | = |
 
-R-01 to R-03 need aggregation across records, which `⟦RULES⟧` does not yet express.
 R-08 needs a stored prior run.
 
 ---
@@ -712,8 +770,11 @@ Remaining:
 1. **The second Engineering split axis** on sheet `08` is not yet named.
 2. **Datasets `02`–`10`.** Header labels and attributes not yet specified. Rows 6–9 of
    `00. NC+Interdep` hold provisional sketches, marked as such.
-3. **Step-2 mechanics beyond `01`.** Sort order, target column order and derived
-   measures are defined per dataset in `datatransform/specs.py`.
+3. **Sections.** A Fire + Nat Cat treaty carries Fire, Windstorm and Earthquake as
+   separate section-blocks, and `03` applies only to per-risk sections. The design is
+   agreed — sections are blocks, identified by a `Section` attribute, with rules scoped
+   by section kind and expanded per applicable section — but not yet built. The current
+   implementation covers **Fire-only, Engineering and Miscellaneous** treaties.
 4. **Sheet `20. Summary`.** Specified in §9.1 O6 but not yet implemented; it needs at
    least two datasets to be meaningful.
 
@@ -773,6 +834,8 @@ the run fails rather than reporting a plausible wrong number.
 - `01. History_Transposed` — transposed, 6 records
 - `02. EPI Projections` — row-wise, 4 records: `N est`, `N 9 months`, `N re-est`, `N+1`
 - `02. EPI Projections_Transposed` — transposed, the same 4 records
+- `03. Large Losses` — row-wise, 8 claims across 2021, 2023, 2024 and 2025; **2022
+  deliberately has none**, so the annual table exercises the zero row
 
 Each dataset is present in both orientations and verified to produce identical output —
 same records, same totals, same derived figures — differing only in whether provenance

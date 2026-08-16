@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 
 from .model import Block, ExtractionError, Record
-from .specs import Step2Spec
+from .specs import AggregateSpec, Step2Spec
 
 FIELD = re.compile(r"\{([^}]+)\}")
 
@@ -23,6 +23,20 @@ class Figure:
 
 
 @dataclass
+class AggregateTable:
+    """The second step-2 table — spec §9.2.1 S14."""
+
+    title: str
+    group_by: str
+    measures: tuple[str, ...]
+    rows: list[tuple]                       # (group value, {measure: total})
+    zero_filled: list[str] = field(default_factory=list)
+
+    def totals(self) -> dict[str, float]:
+        return {m: sum(values.get(m, 0.0) for _, values in self.rows) for m in self.measures}
+
+
+@dataclass
 class Step2Result:
     block: Block
     spec: Step2Spec
@@ -30,6 +44,7 @@ class Step2Result:
     computed: dict[str, list[float | None]] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     figures: list[Figure] = field(default_factory=list)
+    aggregate: AggregateTable | None = None
 
     @property
     def declared_columns(self) -> tuple[str, ...]:
@@ -138,7 +153,36 @@ def _derived_figures(block: Block, spec: Step2Spec, actual_year: int | None):
     return out
 
 
-def apply_step2(block: Block, spec: Step2Spec, nomenclature=None) -> Step2Result:
+def _aggregate(block: Block, spec: AggregateSpec, blocks) -> AggregateTable:
+    """Group and sum, spanning the declared year window — spec §9.2.1 S14."""
+    from .crosschecks import split_label, years_in
+
+    totals: dict[str, dict[str, float]] = {}
+    for record in block.records:
+        key = record.values.get(spec.group_by)
+        if key is None:
+            continue
+        bucket = totals.setdefault(str(key), {m: 0.0 for m in spec.measures})
+        for measure in spec.measures:
+            value = record.values.get(measure)
+            if isinstance(value, (int, float)):
+                bucket[measure] += float(value)
+
+    # A year with no record must still appear, showing 0.
+    zero_filled = []
+    window = blocks.get(spec.zero_fill_from) if blocks and spec.zero_fill_from else None
+    if window is not None:
+        present = {split_label(k)[0] for k in totals}
+        for year in years_in(window):
+            if year not in present:
+                totals[str(year)] = {m: 0.0 for m in spec.measures}
+                zero_filled.append(str(year))
+
+    rows = sorted(totals.items(), key=lambda kv: _natural_key(kv[0]))
+    return AggregateTable(spec.title, spec.group_by, spec.measures, rows, sorted(zero_filled))
+
+
+def apply_step2(block: Block, spec: Step2Spec, nomenclature=None, blocks=None) -> Step2Result:
     missing = [f for f in spec.sort_by if f not in block.dataset.headers]
     if missing:
         raise ExtractionError(f"step 2 sorts by {missing}, which the dataset does not declare")
@@ -179,10 +223,29 @@ def apply_step2(block: Block, spec: Step2Spec, nomenclature=None) -> Step2Result
         readable = FIELD.sub(lambda m: m.group(1), calc.expression).replace("/", " / ")
         notes.append(f"calculated {calc.name} = {readable} (value-adding)")
 
+    aggregate = _aggregate(block, spec.aggregate, blocks) if spec.aggregate else None
+    if aggregate is not None:
+        notes.append(
+            f"aggregated: {aggregate.title} — {spec.aggregate.group_by} × "
+            f"{', '.join(spec.aggregate.measures)} (value-preserving in total)"
+        )
+        if aggregate.zero_filled:
+            notes.append(
+                f"years with no record shown as 0: {', '.join(aggregate.zero_filled)}"
+            )
+
     result = Step2Result(
         block=block, spec=spec, records=records, computed=computed, notes=notes,
-        figures=_derived_figures(block, spec, actual_year),
+        figures=_derived_figures(block, spec, actual_year), aggregate=aggregate,
     )
+
+    if aggregate is not None:
+        for measure, total in aggregate.totals().items():
+            if abs(total - result.totals().get(measure, 0.0)) > 1e-9:
+                raise ExtractionError(
+                    f"the aggregate total for {measure!r} is {total}, but the detail "
+                    f"totals {result.totals().get(measure)} — grouping lost records"
+                )
 
     # Sorting and reordering cannot move a total; if they do, that is a bug — spec §10 C3.
     before, after = block.totals(), result.totals()
