@@ -155,14 +155,14 @@ def run(source: str | Path, output: str | Path | None = None,
             _extract_sheet_outcome(title, values_wb, formulas_wb, nomenclature, debug, process)
         )
 
-    blocks = {b.dataset.key: b for o in report.outcomes for b in o.blocks}
+    blocks = [b for o in report.outcomes for b in o.blocks]
     report.rule_results = run_rules(nomenclature, blocks)
     _log_rules(report.rule_results, nomenclature, debug, process)
 
     for outcome in report.outcomes:
         for block in outcome.blocks:
-            block.crosschecks = results_for(report.rule_results, block.dataset.key)
-            block.hypotheses.extend(hypotheses_from(report.rule_results, block.dataset.key))
+            block.crosschecks = results_for(report.rule_results, block)
+            block.hypotheses.extend(hypotheses_from(report.rule_results, block))
             _number_hypotheses(block)
 
     # Pass 2 — transform and write.
@@ -235,7 +235,9 @@ def _log_rules(results, nomenclature, debug, process) -> None:
     if not results:
         return
     process.info("")
-    process.info("Crosschecks (⟦RULES⟧ of sheet 00, N = %s)", nomenclature.actual_year)
+    sections = ", ".join(f"{s.name} ({s.kind})" for s in nomenclature.sections) or "none declared"
+    process.info("Crosschecks (⟦RULES⟧ of sheet 00, N = %s) — sections: %s",
+                 nomenclature.actual_year, sections)
     for r in results:
         process.info("  %-11s %-15s %s %s %s — %s",
                      r.label, r.status.upper(), r.rule.left, r.rule.relation,

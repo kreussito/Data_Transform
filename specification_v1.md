@@ -6,9 +6,9 @@ Excel, driven by metadata declared in the workbook itself.
 | | |
 |---|---|
 | **Version** | 1 |
-| **Status** | `00`–`03` implemented for per-risk treaties; sections and `04`–`10` outstanding |
+| **Status** | `00`–`04` implemented, per-risk and cat sections; `05`–`10` outstanding |
 | **Cadence** | Once per treaty, per year |
-| **Reference workbook** | `Intake_v1.xlsx` |
+| **Reference workbooks** | `Intake_v1.xlsx` · `Intake_Engineering_v1.xlsx` · `Intake_FireCat_v1.xlsx` · `Intake_FireEQWind_v1.xlsx` |
 
 ---
 
@@ -82,6 +82,44 @@ content is an interdependency failure.
 Sheets are matched by **numeric prefix first**, text second. Both sides are normalised
 for whitespace, non-breaking spaces, quote style and case. `10. Triangles` and
 `10. Triangels` therefore resolve to the same sheet.
+
+### 2.3 Sections — what a treaty is made of
+
+A treaty is one or more **sections**, declared in `⟦SECTIONS⟧` of sheet 00:
+
+| Section | Kind | Datasets |
+|---|---|---|
+| `Fire` | per risk | 01, 02, 03 |
+| `Earthquake` | cat | 01, 02, 04 |
+| `Windstorm` | cat | 01, 02, 04 |
+
+A Fire-only or Engineering treaty lists one per-risk section. A Nat Cat treaty lists
+cat sections and **no `03` anywhere** — the absence of large losses is *declared*, not
+inferred from a missing sheet.
+
+**A section is a block.** The `Header_i` mechanism already built for multi-block sheets
+is the section mechanism, so where the blocks sit does not matter:
+
+```
+three sheets                        two sheets, one combined
+01. History Fire   Section = Fire   01. History Fire  Section   = Fire
+01. History EQ     Section = EQ     01. History Cat   Section_1 = Earthquake
+01. History Wind   Section = Wind                     Section_2 = Windstorm
+```
+
+Both shapes yield the same section-blocks and the same results. `Intake_FireCat_v1.xlsx`
+and `Intake_FireEQWind_v1.xlsx` carry identical figures in the two layouts, and are
+verified to produce identical crosschecks.
+
+**Roles.** The leading number of a dataset key is its **role**: `01 History Fire` and
+`01 History EQ` both play role `01`. Rules reference the role, so one declaration
+serves every section. Where a role and section resolve to several blocks, the row-wise
+one wins — a transposed twin is the same data in a different shape — and anything still
+ambiguous resolves to nothing rather than a guess.
+
+**Block boundaries.** A block's records stop where the next block's `Header_j` begins.
+Without that, the first block of a stacked sheet would scan to the end and swallow the
+records below it.
 
 ---
 
@@ -647,13 +685,19 @@ Each side takes one of three forms, distinguished by shape alone:
 `{N}` and `{N+1}` resolve from `⟦GLOBAL⟧`. `{Y}` is a **wildcard**: the rule is declared
 once and evaluated once per year present in the data, reported as `R-01/2023`.
 
-| ID | Left | Rel | Right | Tol | Severity |
+| ID | Left | Rel | Right | Tol | Scope |
 |---|---|---|---|---|---|
-| R-05 | `01 History.Premium@{N} 9 months` | `=` | `02 EPI.EPI@{N} 9 months` | 1 | error |
-| R-06 | `01 History.Premium@{N}` | `=` | `02 EPI.EPI@{N} re-est` | 1 | error |
-| R-07 | `02 EPI.EPI@{N} re-est` | `>=` | `02 EPI.EPI@{N} 9 months` | 0 | error |
-| R-01 | `SUM(03 Large.Loss amount@{Y})` | `<=` | `01 History.Incurred Losses@{Y}` | 1 | error |
-| R-09 | `01 History.Year basis` | `=` | `03 Large.Year basis` | 0 | error |
+| R-05 | `01.Premium@{N} 9 months` | `=` | `02.EPI@{N} 9 months` | 1 | *all* |
+| R-06 | `01.Premium@{N}` | `=` | `02.EPI@{N} re-est` | 1 | *all* |
+| R-07 | `02.EPI@{N} re-est` | `>=` | `02.EPI@{N} 9 months` | 0 | *all* |
+| R-01 | `SUM(03.Loss amount@{Y})` | `<=` | `01.Incurred Losses@{Y}` | 1 | **per risk** |
+| R-02 | `SUM(04.Loss amount@{Y})` | `<=` | `01.Incurred Losses@{Y}` | 1 | **cat** |
+| R-09 | `01.Year basis` | `=` | `03.Year basis` | 0 | **per risk** |
+
+**Scope selects the sections a rule runs over**, and the rule is evaluated once per
+applicable section — reported as `R-01/Fire/2023`. On Fire + EQ + Wind, R-05 runs three
+times, R-01 only on Fire, R-02 only on the two cat sections. Adding a section to
+`⟦SECTIONS⟧` brings its checks with it.
 
 R-05 is the strongest tie: the same nine months of the same year, reported in two
 sheets. R-06 catches an estimate masquerading as an actual — a full-year figure for N in
@@ -689,9 +733,10 @@ sheets it names, so a reviewer reading either one sees the tie.
 | `not applicable` | the dataset is absent from this pack — structure, not a problem. Raises nothing |
 | `skipped` | it should apply but could not be evaluated — **a question** |
 
-The distinction matters: a Nat Cat treaty has no `03`, so R-01 and R-09 are *not
-applicable* and stay silent, rather than filling the log with complaints about a sheet
-that correctly does not exist.
+The distinction matters, and `⟦SECTIONS⟧` is what states it. A Nat Cat treaty declares
+no per-risk section, so R-01 and R-09 are *not applicable* and stay silent, rather than
+filling the log with complaints about a sheet that correctly does not exist. Equally, a
+Fire treaty reports R-02 as not applicable.
 
 ### 10.2 Occurrence-year consistency
 
@@ -770,11 +815,8 @@ Remaining:
 1. **The second Engineering split axis** on sheet `08` is not yet named.
 2. **Datasets `02`–`10`.** Header labels and attributes not yet specified. Rows 6–9 of
    `00. NC+Interdep` hold provisional sketches, marked as such.
-3. **Sections.** A Fire + Nat Cat treaty carries Fire, Windstorm and Earthquake as
-   separate section-blocks, and `03` applies only to per-risk sections. The design is
-   agreed — sections are blocks, identified by a `Section` attribute, with rules scoped
-   by section kind and expanded per applicable section — but not yet built. The current
-   implementation covers **Fire-only, Engineering and Miscellaneous** treaties.
+3. **Remaining datasets.** `05`–`10` are not yet specified. `04. Cat Losses` is
+   implemented alongside `03`, since a cat section needs it.
 4. **Sheet `20. Summary`.** Specified in §9.1 O6 but not yet implemented; it needs at
    least two datasets to be meaningful.
 
@@ -825,7 +867,19 @@ facts a human declares:
 The value-preserving steps are checked: if sorting or reordering moves a measure total,
 the run fails rather than reporting a plausible wrong number.
 
-### 14.2 Status of the reference workbook
+### 14.2 The reference workbooks
+
+Four treaty shapes, generated by `tools/build_v1.py` and `tools/build_intake.py`:
+
+| Workbook | Sections | Demonstrates |
+|---|---|---|
+| `Intake_v1.xlsx` | Fire | both orientations; R-02 not applicable |
+| `Intake_Engineering_v1.xlsx` | Engineering | the same shape, different data |
+| `Intake_FireCat_v1.xlsx` | Fire, Earthquake, Windstorm | the two cat sections **share one sheet** |
+| `Intake_FireEQWind_v1.xlsx` | Fire, Earthquake, Windstorm | **a sheet per section** |
+
+The last two carry identical figures and are verified to produce identical
+crosschecks — the test that a section really is just a block.
 
 `Intake_v1.xlsx` implements this specification for:
 

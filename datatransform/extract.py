@@ -251,6 +251,20 @@ def _resolve_labels(cells: list[tuple], dataset: Dataset, where: str) -> dict[st
     return {label: str(refs[0]) for label, refs in hits.items()}
 
 
+def _block_boundary(markers, index: int, orientation, limit_row: int) -> int:
+    """Where this block's records stop — spec §6.
+
+    A sheet may stack several section-blocks. Without a boundary the first block would
+    scan to the end of the sheet and swallow the records of the ones below it.
+    """
+    if orientation is Orientation.TRANSPOSED:
+        return limit_row
+    mine = next((m.row for m in markers if m.name == "Header" and m.index == index), None)
+    later = [m.row for m in markers
+             if m.name == "Header" and m.index != index and mine is not None and m.row > mine]
+    return min(later) - 1 if later else limit_row
+
+
 def extract_block(values_ws, formulas_ws, dataset: Dataset, markers, index: int,
                   nomenclature: Nomenclature) -> Block:
     header = structural(markers, "Header", index)
@@ -302,10 +316,14 @@ def extract_block(values_ws, formulas_ws, dataset: Dataset, markers, index: int,
         address_map=address,
         field_types=nomenclature.field_types(dataset.headers),
     )
+    block.section = None
     _resolve_attributes(block, markers, nomenclature)
+    section = block.attributes.get("Section")
+    block.section = norm(section.value) if section else None
 
     if orientation is Orientation.ROW_WISE:
-        _select_rows(block, values_ws, formulas_ws, limit_row, limit_col, where)
+        boundary = _block_boundary(markers, index, orientation, limit_row)
+        _select_rows(block, values_ws, formulas_ws, boundary, limit_col, where)
     else:
         _select_columns(block, values_ws, formulas_ws, limit_row, limit_col, where)
 

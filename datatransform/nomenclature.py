@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from .model import Dataset, ExtractionError, FieldType, Rule
+from .model import Dataset, ExtractionError, FieldType, Rule, Section
 
 HEADER_COL_FIRST = 4     # D
 HEADER_COL_LAST = 13     # M
@@ -19,6 +19,7 @@ TYPES_ANCHOR = "⟦TYPES⟧"
 VOCAB_ANCHOR = "⟦VOCABULARY⟧"
 RULES_ANCHOR = "⟦RULES⟧"
 PERIOD_ANCHOR = "⟦PERIOD ORDER⟧"
+SECTIONS_ANCHOR = "⟦SECTIONS⟧"
 
 
 def norm(value) -> str:
@@ -98,13 +99,14 @@ class Nomenclature:
     """Sheet 00: the frame — datasets, globals, types, vocabulary and rules."""
 
     def __init__(self, datasets, vocabulary, globals_=None, types=None,
-                 rules=None, period_order=None):
+                 rules=None, period_order=None, sections=None):
         self.datasets = datasets
         self.vocabulary = vocabulary
         self.globals = globals_ or {}
         self.types = types or {}
         self.rules = rules or []
         self.period_order = period_order or {}
+        self.sections = sections or []
 
     @property
     def actual_year(self) -> int | None:
@@ -164,6 +166,7 @@ class Nomenclature:
             cls._read_types(ws),
             cls._read_rules(ws),
             cls._read_period_order(ws),
+            cls._read_sections(ws),
         )
 
     @staticmethod
@@ -176,6 +179,29 @@ class Nomenclature:
             name.casefold(): FieldType.parse(kind)
             for _, (name, kind) in _read_block(ws, TYPES_ANCHOR, 2)
         }
+
+    @staticmethod
+    def _read_sections(ws) -> list[Section]:
+        """⟦SECTIONS⟧ — what this treaty is made of — spec §2.3."""
+        out = []
+        for row, (name, kind, roles) in _read_block(ws, SECTIONS_ANCHOR, 3):
+            if not kind:
+                raise ExtractionError(
+                    f"sheet 00 ⟦SECTIONS⟧ row {row}: section {name!r} declares no kind"
+                )
+            declared = tuple(
+                part.strip().zfill(2) for part in roles.replace(";", ",").split(",")
+                if part.strip()
+            )
+            out.append(Section(name, kind.strip().casefold(), declared))
+        return out
+
+    def sections_of_kind(self, kind: str) -> list[Section]:
+        return [s for s in self.sections if s.kind == kind.strip().casefold()]
+
+    def section_named(self, name: str) -> Section | None:
+        wanted = norm(name).casefold()
+        return next((s for s in self.sections if norm(s.name).casefold() == wanted), None)
 
     @staticmethod
     def _read_period_order(ws) -> dict[str, int]:
@@ -195,8 +221,8 @@ class Nomenclature:
     @staticmethod
     def _read_rules(ws) -> list[Rule]:
         rules = []
-        for row, values in _read_block(ws, RULES_ANCHOR, 7):
-            rid, left, rel, right, tol, sev, note = values
+        for row, values in _read_block(ws, RULES_ANCHOR, 8):
+            rid, left, rel, right, tol, sev, scope, note = values
             if not (left and rel and right):
                 raise ExtractionError(
                     f"sheet 00 ⟦RULES⟧ row {row}: incomplete rule {rid!r}"
@@ -207,7 +233,8 @@ class Nomenclature:
                 raise ExtractionError(
                     f"sheet 00 ⟦RULES⟧ row {row}: tolerance {tol!r} is not a number"
                 ) from None
-            rules.append(Rule(rid, left, rel, right, tolerance, sev or "error", note))
+            rules.append(Rule(rid, left, rel, right, tolerance,
+                              sev or "error", note, scope))
         return rules
 
     @staticmethod

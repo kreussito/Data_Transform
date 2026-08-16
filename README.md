@@ -46,9 +46,28 @@ pytest tests/
 | | |
 |---|---|
 | `specification_v1.md` | The rules, in full |
-| `Intake_v1.xlsx` | Reference workbook — sheet 00 plus dataset 01 in both orientations |
+| `Intake_v1.xlsx` | Fire treaty — datasets 00–03, both orientations |
+| `Intake_Engineering_v1.xlsx` | Engineering treaty — the same shape, different data |
+| `Intake_FireCat_v1.xlsx` | Fire + Nat Cat — the two cat sections share one sheet |
+| `Intake_FireEQWind_v1.xlsx` | Fire + Earthquake + Hurricane — a sheet per section |
 | `datatransform/` | Implementation |
+| `tools/` | Generators for the reference workbooks |
 | `tests/` | Test suite covering the specification's rules |
 
-Dataset `01. History` is implemented end to end. Datasets `02`–`10` are not yet
-specified; see §13 of the specification.
+## Sections
+
+A treaty is one or more sections, declared in `⟦SECTIONS⟧` of sheet 00:
+
+| Section | Kind | Datasets |
+|---|---|---|
+| `Fire` | per risk | 01, 02, 03 |
+| `Earthquake` | cat | 01, 02, 04 |
+
+**A section is a block.** Whether the blocks sit in one sheet or three is immaterial —
+the two Nat Cat workbooks carry identical figures in the two layouts and are verified
+to produce identical crosschecks. Rules are scoped by section kind and evaluated once
+per applicable section, so a Fire treaty reports the cat rule as *not applicable* rather
+than complaining about a sheet that correctly does not exist.
+
+Datasets `00`–`04` are implemented. `05`–`10` are not yet specified; see §13 of the
+specification.

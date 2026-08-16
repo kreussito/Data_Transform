@@ -671,7 +671,10 @@ def test_dataset_register_stops_at_the_next_block(nomenclature):
 
 def test_rules_are_read_from_sheet_00(nomenclature):
     ids = [r.id for r in nomenclature.rules]
-    assert ids == ["R-05", "R-06", "R-07", "R-01", "R-09"]
+    assert ids == ["R-05", "R-06", "R-07", "R-01", "R-09", "R-02"]
+    assert [r.scope for r in nomenclature.rules] == [
+        "all", "all", "all", "per risk", "per risk", "cat",
+    ]
     r5 = nomenclature.rules[0]
     assert Rule.parse_ref(r5.left) == ("01 History", "Premium", "{N} 9 months")
     assert r5.relation == "=" and r5.tolerance == 1.0 and r5.severity == "error"
@@ -762,9 +765,15 @@ def _blocks(books, nomenclature, sheets=(ROW_WISE, EPI, "03. Large Losses")):
     }
 
 
+def _find(blocks, key):
+    return blocks[key]
+
+
 def test_all_declared_rules_pass_on_the_reference_workbook(books, nomenclature):
+    """Everything that applies passes; the cat rule is not applicable on a Fire pack."""
     results = run_rules(nomenclature, _blocks(books, nomenclature))
-    assert {r.status for r in results} == {"passed"}
+    assert {r.status for r in results} == {"passed", "not applicable"}
+    assert [r.rule.id for r in results if r.status == "not applicable"] == ["R-02"]
     assert results[0].left_value == results[0].right_value == 14400.0
     assert results[1].left_value == results[1].right_value == 19200.0
 
@@ -799,7 +808,7 @@ def test_scale_is_normalised_before_comparing(books, nomenclature):
     for record in epi.records:
         record.values["EPI"] *= 1000
     results = run_rules(nomenclature, blocks)
-    assert {r.status for r in results} == {"passed"}
+    assert {r.status for r in results} <= {"passed", "not applicable"}
 
 
 def test_a_missing_dataset_is_not_applicable_rather_than_a_failure(books, nomenclature):
@@ -810,7 +819,7 @@ def test_a_missing_dataset_is_not_applicable_rather_than_a_failure(books, nomenc
     assert by_id["R-05"].status == "not applicable"
     assert "not in this pack" in by_id["R-05"].detail
     assert by_id["R-07"].status == "passed"       # R-07 is within 02 alone
-    assert hypotheses_from(results, "02 EPI") == []
+    assert hypotheses_from(results, blocks["02 EPI"]) == []
 
 
 def test_failed_and_skipped_rules_become_questions(books, nomenclature):
@@ -818,8 +827,8 @@ def test_failed_and_skipped_rules_become_questions(books, nomenclature):
     next(r for r in blocks["02 EPI"].records
          if r.values["Year"] == "2025 9 months").values["EPI"] = 13000.0
     results = run_rules(nomenclature, blocks)
-    hyps = hypotheses_from(results, "02 EPI")
-    assert [h.attribute for h in hyps] == ["Crosscheck R-05"]
+    hyps = hypotheses_from(results, blocks["02 EPI"])
+    assert [h.attribute for h in hyps] == ["Crosscheck R-05/Fire"]
     assert hyps[0].confidence is Confidence.OPEN
 
 
@@ -833,7 +842,7 @@ def test_crosschecks_reach_both_sheets(workspace, tmp_path):
         text = [c.value for row in wb[sheet].iter_rows() for c in row
                 if isinstance(c.value, str)]
         assert any("Crosschecks against other sheets" in t for t in text), sheet
-        assert any(t == "R-05" for t in text), sheet
+        assert any(t.startswith("R-05") for t in text), sheet
 
 
 def test_derived_figures_are_written_to_the_sheet(workspace, tmp_path):
@@ -1099,7 +1108,8 @@ def test_year_wildcard_expands_one_rule_per_year(books, nomenclature):
     results = run_rules(nomenclature, _blocks(books, nomenclature))
     r1 = [r for r in results if r.rule.id == "R-01"]
     assert [r.year for r in r1] == [2021, 2023, 2024, 2025]
-    assert [r.label for r in r1] == ["R-01/2021", "R-01/2023", "R-01/2024", "R-01/2025"]
+    assert [r.label for r in r1] == ["R-01/Fire/2021", "R-01/Fire/2023",
+                                     "R-01/Fire/2024", "R-01/Fire/2025"]
     assert all(r.status == "passed" for r in r1)
 
 
@@ -1116,8 +1126,9 @@ def test_large_losses_exceeding_incurred_fails(books, nomenclature):
         record.values["Loss amount"] *= 10
     results = run_rules(nomenclature, blocks)
     failed = [r for r in results if r.status == "failed"]
-    assert [r.label for r in failed] == ["R-01/2021", "R-01/2023", "R-01/2024", "R-01/2025"]
-    assert hypotheses_from(results, "03 Large")[0].confidence is Confidence.OPEN
+    assert [r.label for r in failed] == ["R-01/Fire/2021", "R-01/Fire/2023",
+                                         "R-01/Fire/2024", "R-01/Fire/2025"]
+    assert hypotheses_from(results, blocks["03 Large"])[0].confidence is Confidence.OPEN
 
 
 def test_differing_share_basis_skips_the_comparison(books, nomenclature):
@@ -1167,7 +1178,7 @@ def test_aggregate_reaches_the_written_sheet(workspace, tmp_path):
     text = [c.value for row in ws.iter_rows() for c in row if isinstance(c.value, str)]
     assert "Annual sum of large losses" in text
     assert any("shown as 0: 2022" in t for t in text)
-    assert any(t.startswith("R-01/2021") for t in text)
+    assert any(t.startswith("R-01/Fire/2021") for t in text)
 
 
 def test_dates_are_written_as_dates(workspace, tmp_path):

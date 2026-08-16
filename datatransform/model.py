@@ -79,6 +79,18 @@ class Dataset:
         """The first declared header identifies the record."""
         return self.headers[0]
 
+    @property
+    def role(self) -> str:
+        """The leading number of the key — spec §2.3.
+
+        ``01 History Fire`` and ``01 History EQ`` both play role ``01``: they are the
+        same dataset for different sections of the treaty.
+        """
+        import re as _re
+
+        match = _re.match(r"^\s*(\d+)", self.key)
+        return match.group(1).zfill(2) if match else self.key
+
 
 @dataclass
 class Attribute:
@@ -136,6 +148,7 @@ class Block:
     hypotheses: list[Hypothesis] = field(default_factory=list)
     coercions: list = field(default_factory=list)
     crosschecks: list = field(default_factory=list)
+    section: str | None = None      # which section of the treaty, if declared
     candidates: int = 0
     excluded: int = 0
     unextracted: list[str] = field(default_factory=list)
@@ -166,6 +179,23 @@ class Block:
                    if isinstance(r.values.get(m), (int, float)))
             for m in self.numeric_fields
         }
+
+
+@dataclass(frozen=True)
+class Section:
+    """One row of ⟦SECTIONS⟧ — spec §2.3.
+
+    A treaty is one or more sections. Fire is *per risk* and carries large losses;
+    Earthquake and Windstorm are *cat* and carry event losses instead. Which datasets
+    a section expects is declared, so an absent sheet is structure rather than a gap.
+    """
+
+    name: str
+    kind: str
+    roles: tuple[str, ...] = ()
+
+    def expects(self, role: str) -> bool:
+        return not self.roles or role in self.roles
 
 
 @dataclass(frozen=True)
@@ -242,6 +272,7 @@ class Rule:
     tolerance: float
     severity: str
     note: str = ""
+    scope: str = ""            # "" | "all" | a section kind | a section name
 
     @property
     def left_ref(self) -> Reference:
@@ -267,7 +298,8 @@ class RuleResult:
     detail: str
     left_value: float | None = None
     right_value: float | None = None
-    year: int | None = None    # set when a {Y} rule was expanded
+    year: int | None = None      # set when a {Y} rule was expanded
+    section: str | None = None   # set when the rule was expanded over sections
 
     @property
     def ok(self) -> bool:
@@ -275,7 +307,12 @@ class RuleResult:
 
     @property
     def label(self) -> str:
-        return f"{self.rule.id}/{self.year}" if self.year is not None else self.rule.id
+        parts = [self.rule.id]
+        if self.section:
+            parts.append(self.section)
+        if self.year is not None:
+            parts.append(str(self.year))
+        return "/".join(parts)
 
 
 class ExtractionError(Exception):

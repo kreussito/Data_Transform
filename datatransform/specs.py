@@ -7,6 +7,7 @@ live here, versioned with the tool.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 SPEC_VERSION = "1"
@@ -106,6 +107,16 @@ STEP2: dict[str, Step2Spec] = {
             ),
         ),
     ),
+    "04 Cat": Step2Spec(
+        sort_by=("Year", "Event Date"),
+        ascending=True,
+        aggregate=AggregateSpec(
+            title="Annual sum of cat losses",
+            group_by="Year",
+            measures=("Loss amount",),
+            zero_fill_from="01",
+        ),
+    ),
     "03 Large": Step2Spec(
         sort_by=("Year", "Date of Loss"),
         ascending=True,
@@ -113,7 +124,7 @@ STEP2: dict[str, Step2Spec] = {
             title="Annual sum of large losses",
             group_by="Year",
             measures=("Loss amount",),
-            zero_fill_from="01 History",
+            zero_fill_from="01",
         ),
     ),
 }
@@ -124,4 +135,21 @@ STEP2["02 EPI_T"] = STEP2["02 EPI"]
 
 
 def step2_for(dataset_key: str) -> Step2Spec | None:
-    return STEP2.get(dataset_key)
+    """Exact key first, then the role — spec §2.3.
+
+    A multi-section pack names its sheets ``01 History Fire``, ``01 History EQ`` and so
+    on; they share role ``01`` and therefore the same step-2 mechanics.
+    """
+    spec = STEP2.get(dataset_key)
+    if spec is not None:
+        return spec
+    match = re.match(r"^\s*(\d+)", str(dataset_key))
+    return STEP2_BY_ROLE.get(match.group(1).zfill(2)) if match else None
+
+
+STEP2_BY_ROLE: dict[str, Step2Spec] = {
+    "01": STEP2["01 History"],
+    "02": STEP2["02 EPI"],
+    "03": STEP2["03 Large"],
+    "04": STEP2["04 Cat"],
+}

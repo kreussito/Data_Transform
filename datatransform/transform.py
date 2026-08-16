@@ -170,7 +170,11 @@ def _aggregate(block: Block, spec: AggregateSpec, blocks) -> AggregateTable:
 
     # A year with no record must still appear, showing 0.
     zero_filled = []
-    window = blocks.get(spec.zero_fill_from) if blocks and spec.zero_fill_from else None
+    window = None
+    if blocks and spec.zero_fill_from:
+        from .crosschecks import find_block
+        pool = list(blocks.values()) if isinstance(blocks, dict) else list(blocks)
+        window = find_block(pool, spec.zero_fill_from, block.section)
     if window is not None:
         present = {split_label(k)[0] for k in totals}
         for year in years_in(window):
