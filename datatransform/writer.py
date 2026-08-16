@@ -349,15 +349,27 @@ class BlockWriter:
             self.row += 1
 
 
-def write_blocks(ws, block: Block, result: Step2Result) -> list[tuple[str, str, float]]:
-    """Write step 1 and step 2 beneath the last non-empty row — spec §9.1."""
+def write_blocks(ws, block: Block, result: Step2Result | None) -> list[tuple[str, str, float]]:
+    """Write step 1 and, where one is defined, step 2 — spec §9.1.
+
+    A dataset with no step-2 spec still gets its extraction written. Step 1 is
+    auditable on its own: it is what the sheet says, verified by its own control sums.
+    """
     from .extract import last_non_empty_row
 
     clear_generated(ws)
     start = last_non_empty_row(ws) + 1 + GAP
     writer = BlockWriter(ws, start)
     writer.write_step1(block)
-    writer.write_step2(result)
+    if result is None:
+        writer.row += 1
+        writer._line(
+            f"STEP 2 — not defined for dataset {block.dataset.key!r}. The extraction "
+            "above stands on its own; no sort, ordering or derived measure has been "
+            "specified for this dataset yet."
+        )
+    else:
+        writer.write_step2(result)
 
     for col in range(FIRST_COL, FIRST_COL + 8):
         letter = col_letter(col)

@@ -220,9 +220,14 @@ def _write_sheet(outcome, out_wb, nomenclature, blocks,
     for block in outcome.blocks:
         spec = step2_for(block.dataset.key)
         if spec is None:
-            outcome.status = "error"
+            # Extraction is auditable on its own; only the transformation is missing.
+            outcome.status = "step 1 only"
             outcome.detail = f"no step-2 spec for dataset {block.dataset.key!r}"
-            process.info("%s — no step-2 spec for %s", outcome.sheet, block.dataset.key)
+            process.info("")
+            process.info("%s — extracted, but no step-2 spec for %s; step 1 only.",
+                         outcome.sheet, block.dataset.key)
+            formula_values.extend(write_blocks(out_wb[outcome.sheet], block, None))
+            _log_block(block, None, debug, process)
             continue
 
         result = apply_step2(block, spec, nomenclature, blocks)
@@ -245,7 +250,7 @@ def _log_rules(results, nomenclature, debug, process) -> None:
         debug.info("rule %s: %s (%s)", r.label, r.status, r.detail)
 
 
-def _log_block(block: Block, result: Step2Result, debug, process):
+def _log_block(block: Block, result: Step2Result | None, debug, process):
     key = f"{block.dataset.key}/block {block.index}"
     debug.info("%s: orientation=%s header=%s info=%s map=%s",
                key, block.orientation.value, block.header_ref, block.info_ref, block.address_map)
@@ -286,6 +291,9 @@ def _log_block(block: Block, result: Step2Result, debug, process):
     process.info("  Dataset confidence: %s (worst of all hypotheses).", block.confidence.value)
     for measure, total in block.totals().items():
         process.info("  Control %s: %s", measure, f"{total:,.0f}")
+
+    if result is None:
+        return
 
     process.info("")
     process.info("%s — STEP 2", key)
