@@ -4,13 +4,17 @@
 Run from the repository root:  python tools/build_intake.py
 """
 
+import sys
 from datetime import date
 from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.styles import Border, Font, PatternFill, Side
 
-OUT = Path(__file__).resolve().parents[1] / "Intake_v1.xlsx"
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+OUT = ROOT / "Intake_v1.xlsx"
 
 SECTION = "Fire"
 
@@ -62,7 +66,8 @@ ws.title = "00. NC+Interdep"
 put(ws, "B1", "00. Nomenclature & Interdependencies", title_f)
 put(ws, "B2", "The frame: what each sheet holds, what the names mean, what must tie. "
               "Column A is intentionally empty — no markers in this sheet.", sub_f)
-put(ws, "B3", "Rows 8-9 are provisional sketches, not yet specified.", sub_f)
+put(ws, "B3", "Greyed rows are provisional sketches, not yet specified. "
+              "04 is specified, though this Fire-only pack carries no cat sheet.", sub_f)
 
 # ── dataset register (rows 4-10, as agreed: dataset 01 on row 5)
 for ref, txt in [("B4", "Sheet name"), ("C4", "Key"),
@@ -74,6 +79,8 @@ ATTRS_01 = ["Section", "Currency", "Scale", "Share basis", "Year basis", "Premiu
 ATTRS_02 = ["Section", "Currency", "Scale", "Share basis", "Year basis", "Premium basis", "As at"]
 ATTRS_03 = ["Section", "Currency", "Scale", "Share basis", "Year basis", "Loss basis",
             "Threshold", "Date format", "As at"]
+ATTRS_04 = ["Section", "Currency", "Scale", "Share basis", "Year basis", "Loss basis",
+            "Date format", "Occurrence year from", "As at"]
 
 datasets = [
     (5, "01. History", "01 History",
@@ -82,9 +89,11 @@ datasets = [
      ["Year", "EPI"], ATTRS_02, False),
     (7, "03. Large Losses", "03 Large",
      ["Year", "Name of Loss", "Loss amount", "Date of Loss"], ATTRS_03, False),
+    # Specified, though this Fire-only pack carries no cat sheet: the nomenclature is
+    # the treaty's vocabulary, not an inventory of the sheets that happen to be here.
     (8, "04. Cat Losses", "04 Cat",
-     ["Year", "Event Date", "Event Name", "Incurred Losses"],
-     ["Currency", "Scale", "Year basis", "Loss basis", "As at"], True),
+     ["Year", "Event ID", "Event Name", "Loss amount", "Event Date", "Event End Date",
+      "Number of Claims (optional)"], ATTRS_04, False),
     (9, "05. Risk Profiles", "05 Profile",
      ["Band", "Number of Risks", "Sum Insured", "Premium"],
      ["Currency", "Scale", "Exposure basis", "As at"], True),
@@ -138,8 +147,9 @@ types = [
     ("Year", "text"), ("Premium", "number"), ("Incurred Losses", "number"),
     ("EPI", "number"), ("Band", "text"), ("Number of Risks", "number"),
     ("Sum Insured", "number"), ("Claim Reference", "text"), ("Event Name", "text"),
-    ("Name of Loss", "text"), ("Loss amount", "number"),
-    ("Date of Loss", "date"), ("Event Date", "date"),
+    ("Name of Loss", "text"), ("Event ID", "text"), ("Loss amount", "number"),
+    ("Number of Claims", "number"),
+    ("Date of Loss", "date"), ("Event Date", "date"), ("Event End Date", "date"),
 ]
 for name, kind in types:
     put(ws, f"B{r}", name, body_f)
@@ -159,6 +169,7 @@ for name, values in [
     ("Scale", "1 | 1,000 | 1,000,000"),
     ("Share basis", "100% | ceded only"),
     ("Date format", "ISO | DD.MM.YYYY | MM/DD/YYYY"),
+    ("Occurrence year from", "Event Date | Event End Date"),
     ("Currency", "ISO 4217"),
 ]:
     put(ws, f"B{r}", name, body_f)
@@ -191,8 +202,10 @@ rules = [
      0, "error", "history and large losses must be on the same year basis"),
     ("R-02", "SUM(04 Cat.Loss amount@{Y})", "<=", "01 History.Incurred Losses@{Y}",
      1, "error", "cat losses cannot exceed total incurred for the same year"),
+    ("R-10", "01 History.Year basis", "=", "04 Cat.Year basis",
+     0, "error", "history and cat losses must be on the same year basis"),
 ]
-SCOPES = {"R-01": "per risk", "R-09": "per risk", "R-02": "cat"}
+SCOPES = {"R-01": "per risk", "R-09": "per risk", "R-02": "cat", "R-10": "cat"}
 for rid, left, rel, right, tol, sev, note in rules:
     put(ws, f"B{r}", rid, head_f)
     put(ws, f"C{r}", left, mono_f)
@@ -575,5 +588,14 @@ ws.column_dimensions["G"].width = 46
 ws.column_dimensions["J"].width = 10
 
 wb.save(OUT)
+
+# openpyxl writes formulas with no cached result, and an uncalculated =ROW() selector is
+# fatal by design (spec §7.2) — a skipped record would otherwise be silent. Inject the
+# cache here so the script produces a workbook that actually runs.
+from datatransform.recalc import inject  # noqa: E402
+
+result = inject(OUT)
+
 print("written:", OUT)
 print("sheets :", wb.sheetnames)
+print("cached :", result["injected"], "formula value(s)")

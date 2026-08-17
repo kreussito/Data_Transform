@@ -671,9 +671,9 @@ def test_dataset_register_stops_at_the_next_block(nomenclature):
 
 def test_rules_are_read_from_sheet_00(nomenclature):
     ids = [r.id for r in nomenclature.rules]
-    assert ids == ["R-05", "R-06", "R-07", "R-01", "R-09", "R-02"]
+    assert ids == ["R-05", "R-06", "R-07", "R-01", "R-09", "R-02", "R-10"]
     assert [r.scope for r in nomenclature.rules] == [
-        "all", "all", "all", "per risk", "per risk", "cat",
+        "all", "all", "all", "per risk", "per risk", "cat", "cat",
     ]
     r5 = nomenclature.rules[0]
     assert Rule.parse_ref(r5.left) == ("01 History", "Premium", "{N} 9 months")
@@ -773,7 +773,8 @@ def test_all_declared_rules_pass_on_the_reference_workbook(books, nomenclature):
     """Everything that applies passes; the cat rule is not applicable on a Fire pack."""
     results = run_rules(nomenclature, _blocks(books, nomenclature))
     assert {r.status for r in results} == {"passed", "not applicable"}
-    assert [r.rule.id for r in results if r.status == "not applicable"] == ["R-02"]
+    # Both cat rules stay silent on a Fire pack: structure, not a gap.
+    assert [r.rule.id for r in results if r.status == "not applicable"] == ["R-02", "R-10"]
     assert results[0].left_value == results[0].right_value == 14400.0
     assert results[1].left_value == results[1].right_value == 19200.0
 
