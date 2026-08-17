@@ -8,7 +8,7 @@ Excel, driven by metadata declared in the workbook itself.
 | **Version** | 1 |
 | **Status** | `00`–`04` implemented, per-risk and cat sections; `05`–`10` outstanding |
 | **Cadence** | Once per treaty, per year |
-| **Reference workbooks** | `Intake_v1.xlsx` · `Intake_Engineering_v1.xlsx` · `Intake_FireCat_v1.xlsx` · `Intake_FireEQWind_v1.xlsx` |
+| **Reference workbooks** | `Intake_v1.xlsx` · `Intake_Engineering_v1.xlsx` · `Intake_EngineeringCombined_v1.xlsx` · `Intake_FireCat_v1.xlsx` · `Intake_FireEQWind_v1.xlsx` |
 
 ---
 
@@ -128,9 +128,10 @@ serves every section. Where a role and section resolve to several blocks, the ro
 one wins — a transposed twin is the same data in a different shape — and anything still
 ambiguous resolves to nothing rather than a guess.
 
-**Block boundaries.** A block's records stop where the next block's `Header_j` begins.
-Without that, the first block of a stacked sheet would scan to the end and swallow the
-records below it.
+**Block boundaries.** A stacked block's records stop where the next block's `Header_j`
+begins. Without that, the first block of a stacked sheet would scan to the end and
+swallow the records below it. Blocks that *overlay* one another are bounded differently —
+see §6.5.
 
 ---
 
@@ -278,8 +279,15 @@ Every data sheet declares its own structure through markers in **column A**.
 | `Info_i = <col>` | Row-wise: this column holds block *i*'s record selectors |
 | `Info_i = <row>` | Transposed: this row holds block *i*'s record selectors |
 | `Transpose_i` | Block *i* is transposed |
+| `Dataset_i = <key>` | Which dataset block *i* **is** — defaults to the sheet-name match (§6.4) |
+| `Section_i = <name>` | Which section of the treaty block *i* belongs to (§2.3) |
 | `<Attribute> = <value>` | An attribute of the sheet or block |
 | `H_<Attribute> = <value>` | The same, declared as a hypothesis |
+
+`Header`, `Info`, `Transpose` and `Dataset` are **structural**: they say how to read the
+block, so they never appear in the attribute list a reviewer reads. `Section` is not
+structural — which part of the treaty a figure describes is a fact *about the data*, and
+belongs beside `Currency` and `Year basis` where a reviewer will look for it.
 
 ---
 
@@ -383,7 +391,77 @@ This has three consequences:
 - **The sheet is self-evidencing.** Anyone opening it sees exactly which columns feed the
   extraction.
 
-The extraction row is never itself a record; its selector cell stays empty.
+The extraction row is never itself a record; its selector cell stays empty. **No block's
+extraction row is ever a record of any block** — which matters once two blocks overlay
+one another (§6.5), since one block's extraction row then sits among another's records.
+
+### 6.4 A block may name its own dataset
+
+The sheet name resolves to a dataset via `00` (§2.2). That is a **default, not a law**: a
+block may override it.
+
+```
+A12:  Header_1
+A13:  Dataset_1 = 03 Large
+A14:  Header_2
+A15:  Dataset_2 = 04 Cat
+```
+
+A key that `00` does not declare is fatal. A sheet whose name matches no dataset is
+skipped as before — unless one of its blocks names a dataset, in which case the sheet is
+read and every block must name one.
+
+### 6.5 Stacked and overlaid blocks
+
+Two arrangements, told apart by the **selector column** without anyone declaring which
+is which:
+
+| | Blocks sit | Selector columns | Boundary |
+|---|---|---|---|
+| **Stacked** | one below the other, different rows | **shared** | block *i* stops where block *j*'s `Header_j` begins |
+| **Overlaid** | over the *same* rows | **different** | none — each selector already identifies its own rows |
+
+Stacked is how a combined History sheet carries Earthquake and Windstorm: without the
+boundary the first block would scan to the end and swallow the second's records.
+
+Overlaid is how **one loss list carries both `03` and `04`** — the Engineering and
+Miscellaneous case, where a cedent reports large losses and cat events together:
+
+```
+        B          C          D       E              F        G      H     I      J        K
+11      Claim no.  Cat code   U/W Yr  Description    Amount   From   To    Claims        ← source header
+12                            Year    Name of Loss   Loss amount  Date of Loss           ← Header_1
+14                 Event ID   Year    Event Name     Loss amount  Event Date  …          ← Header_2
+16      CL-2201               2021    Turbine …      1 420    …                 =ROW()
+17                 EV-301     2021    Flood, Saxony  1 150    …                          =ROW()
+```
+
+with
+
+```
+J:  =IF($C16="",  ROW(), "")      a row with no cat code is a large loss
+K:  =IF($C16<>"", ROW(), "")      a row with one is a cat event
+```
+
+**The selector column does the classifying**, and nothing is inferred: the cedent's own
+cat-code column drives it, and a human wrote the formula that says so. A selector holding
+`""` is a formula that decided the row is not this block's — the same as an empty cell.
+
+A boundary here would be fatal: `Header_2` sits *above* the shared records, so block 1
+would stop before reading any of them. That is why the boundary follows the selector
+column rather than the header position.
+
+Because each block sees the other's rows and columns, both are **reconciled** afterwards,
+or the step-1 block would state two false things about itself:
+
+- a column the sibling extracts is not "contained data, not declared in `00`" — it *is*
+  declared, in the other block's dataset;
+- a row the sibling extracts is not an *excluded* record — nothing was dropped. It is
+  reported instead as `3 extracted by 04 Cat on this sheet — one list, two datasets`.
+
+`Intake_Engineering_v1.xlsx` and `Intake_EngineeringCombined_v1.xlsx` are the same treaty
+in the two layouts, verified to produce identical records, identical crosschecks and an
+identical §10.3 check.
 
 ---
 
@@ -1076,12 +1154,13 @@ the run fails rather than reporting a plausible wrong number.
 
 ### 14.2 The reference workbooks
 
-Four treaty shapes, generated by `tools/build_v1.py` and `tools/build_intake.py`:
+Five treaty shapes, generated by `tools/build_v1.py` and `tools/build_intake.py`:
 
 | Workbook | Sections | Demonstrates |
 |---|---|---|
 | `Intake_v1.xlsx` | Fire | both orientations; R-02 not applicable |
 | `Intake_Engineering_v1.xlsx` | Engineering | **one per-risk section carrying both `03` and `04`** — the §10.3 sum |
+| `Intake_EngineeringCombined_v1.xlsx` | Engineering | the same treaty with **both loss datasets in one list** — §6.5 |
 | `Intake_FireCat_v1.xlsx` | Fire, Earthquake, Windstorm | the two cat sections **share one sheet** |
 | `Intake_FireEQWind_v1.xlsx` | Fire, Earthquake, Windstorm | **a sheet per section** |
 

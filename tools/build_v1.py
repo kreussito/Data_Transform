@@ -233,6 +233,8 @@ for m, d in [
     ("Info_i = <col>", "row-wise: this column holds the record selectors, =ROW()"),
     ("Info_i = <row>", "transposed: this row holds the record selectors, =COLUMN()"),
     ("Transpose_i", "block i is transposed"),
+    ("Dataset_i = <key>", "which dataset block i is — defaults to the sheet-name match"),
+    ("Section_i = <name>", "which section of the treaty block i belongs to"),
     ("<Attribute> = <value>", "an attribute of the sheet (unsuffixed) or block i (suffixed _i)"),
     ("H_<Attribute> = <val>", "the same, declared as a hypothesis — raises a query"),
 ]:

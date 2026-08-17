@@ -274,17 +274,52 @@ def _resolve_labels(cells: list[tuple], dataset: Dataset, where: str) -> dict[st
 
 
 def _block_boundary(markers, index: int, orientation, limit_row: int) -> int:
-    """Where this block's records stop — spec §6.
+    """Where this block's records stop — spec §6, §6.5.
 
-    A sheet may stack several section-blocks. Without a boundary the first block would
-    scan to the end of the sheet and swallow the records of the ones below it.
+    Two arrangements, and the selector column tells them apart without anyone declaring
+    which is which:
+
+    **Stacked** — blocks sit one below the other and *share* a selector column, as the
+    section-blocks of a combined History sheet do. Without a boundary the first block
+    would scan to the end and swallow the records below it.
+
+    **Overlaid** — blocks read the *same* rows through *different* selector columns, as
+    a combined large-and-cat loss list does. Here a boundary would be fatal: the second
+    block's extraction row sits above the shared records, so the first block would stop
+    before reading any of them.
+
+    A block therefore stops only at a later block that could compete for its rows — one
+    reading the same selector column. Where the columns differ, each selector already
+    identifies its own rows and no boundary is needed.
     """
     if orientation is Orientation.TRANSPOSED:
         return limit_row
     mine = next((m.row for m in markers if m.name == "Header" and m.index == index), None)
-    later = [m.row for m in markers
-             if m.name == "Header" and m.index != index and mine is not None and m.row > mine]
+    if mine is None:
+        return limit_row
+
+    my_selector = _selector_of(markers, index)
+    later = [
+        m.row for m in markers
+        if m.name == "Header" and m.index != index and m.row > mine
+        and _selector_of(markers, m.index) == my_selector
+    ]
     return min(later) - 1 if later else limit_row
+
+
+def _selector_of(markers, index: int) -> str | None:
+    marker = structural(markers, "Info", index)
+    return norm(marker.value).casefold() if marker and marker.value else None
+
+
+def _header_rows(markers) -> set[int]:
+    """Every block's extraction row. None of them is ever a record — spec §6.3.
+
+    Matters for overlaid blocks: block 1's records begin one row below its own header
+    and would otherwise swallow block 2's extraction row, whose labels sit in the same
+    columns block 1 reads as measures.
+    """
+    return {m.row for m in markers if m.name == "Header"}
 
 
 def extract_block(values_ws, formulas_ws, dataset: Dataset, markers, index: int,
@@ -345,7 +380,8 @@ def extract_block(values_ws, formulas_ws, dataset: Dataset, markers, index: int,
 
     if orientation is Orientation.ROW_WISE:
         boundary = _block_boundary(markers, index, orientation, limit_row)
-        _select_rows(block, values_ws, formulas_ws, boundary, limit_col, where)
+        _select_rows(block, values_ws, formulas_ws, boundary, limit_col, where,
+                     _header_rows(markers))
     else:
         _select_columns(block, values_ws, formulas_ws, limit_row, limit_col, where)
 
@@ -355,7 +391,8 @@ def extract_block(values_ws, formulas_ws, dataset: Dataset, markers, index: int,
     return block
 
 
-def _select_rows(block: Block, values_ws, formulas_ws, limit_row, limit_col, where):
+def _select_rows(block: Block, values_ws, formulas_ws, limit_row, limit_col, where,
+                 header_rows=()):
     sel = col_idx(block.info_ref)
     header_row = int(block.header_ref)
     # A candidate must carry at least one measure; text in the key column (a footnote,
@@ -365,7 +402,13 @@ def _select_rows(block: Block, values_ws, formulas_ws, limit_row, limit_col, whe
 
     # Records follow the extraction row; it is never itself a record — spec §6.3, §7.
     for row in range(header_row + 1, limit_row + 1):
+        if row in header_rows:
+            continue                      # another block's extraction row, not a record
         marker = values_ws.cell(row=row, column=sel).value
+        # A selector holding "" is a formula that decided this row is not ours — spec
+        # §7.1. `=IF(<test>, ROW(), "")` is how one list is split into two blocks.
+        if isinstance(marker, str) and not marker.strip():
+            marker = None
         if marker is None:
             formula = formulas_ws.cell(row=row, column=sel).value
             if isinstance(formula, str) and formula.startswith("="):
@@ -472,12 +515,79 @@ def _select_columns(block: Block, values_ws, formulas_ws, limit_row, limit_col, 
             block.unextracted.append(str(row))
 
 
+def _dataset_for_block(values_ws, nomenclature, markers, index, default):
+    """Which dataset this block *is* — spec §6.4.
+
+    The sheet name is a **default, not a law**. A cedent who reports large losses and
+    cat events in one list needs both datasets on one sheet, so a block may name its
+    own with ``Dataset_i = 04 Cat``.
+    """
+    declared = structural(markers, "Dataset", index)
+    if declared is None or not declared.value:
+        if default is None:
+            raise ExtractionError(
+                f"{values_ws.title!r} block {index}: the sheet matches no dataset in "
+                f"sheet 00, so the block must name one with 'Dataset_{index} = <key>'"
+            )
+        return default
+
+    wanted = norm(declared.value)
+    for dataset in nomenclature.datasets.values():
+        if norm(dataset.key).casefold() == wanted.casefold():
+            return dataset
+    raise ExtractionError(
+        f"{values_ws.title!r} block {index}: Dataset_{index} = {wanted!r}, which is not "
+        f"a dataset key in sheet 00 ({', '.join(d.key for d in nomenclature.datasets.values())})"
+    )
+
+
 def extract_sheet(values_ws, formulas_ws, nomenclature: Nomenclature, markers) -> list[Block]:
     """All blocks of one sheet. No ``Header_i`` → nothing extracted — spec §4 M7."""
-    dataset = nomenclature.dataset_for(values_ws.title)
-    if dataset is None:
+    default = nomenclature.dataset_for(values_ws.title)
+    indices = block_indices(markers)
+    if default is None and not any(
+        structural(markers, "Dataset", i) is not None for i in indices
+    ):
         return []
-    return [
-        extract_block(values_ws, formulas_ws, dataset, markers, i, nomenclature)
-        for i in block_indices(markers)
+
+    blocks = [
+        extract_block(
+            values_ws, formulas_ws,
+            _dataset_for_block(values_ws, nomenclature, markers, i, default),
+            markers, i, nomenclature,
+        )
+        for i in indices
     ]
+    _reconcile_siblings(blocks)
+    return blocks
+
+
+def _reconcile_siblings(blocks) -> None:
+    """Reconcile blocks that overlay one another — spec §6.5.
+
+    Where two blocks read the same rows through different selectors, each sees the
+    other's rows and columns and would otherwise report them as findings against
+    itself. Both statements would be false in an audit document:
+
+    * a column the sibling extracts is **not** "contained data, not declared in 00" —
+      it is declared, in the other block's dataset;
+    * a row the sibling extracts is **not** an excluded record — nothing was dropped,
+      it simply belongs to the other list.
+    """
+    taken = {ref for b in blocks for ref in b.address_map.values()}
+    for block in blocks:
+        block.unextracted = [ref for ref in block.unextracted if ref not in taken]
+
+    for block in blocks:
+        elsewhere = {
+            r.source_ref: b.dataset.key
+            for b in blocks if b is not block
+            for r in b.records
+        }
+        kept = [r for r in block.excluded_records if r.source_ref not in elsewhere]
+        claimed = len(block.excluded_records) - len(kept)
+        if claimed:
+            block.excluded_records = kept
+            block.excluded -= claimed
+            block.claimed_elsewhere = claimed
+            block.claimed_by = sorted(set(elsewhere.values()))

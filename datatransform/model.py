@@ -155,6 +155,8 @@ class Block:
     section: str | None = None      # which section of the treaty, if declared
     candidates: int = 0
     excluded: int = 0
+    claimed_elsewhere: int = 0            # rows another block on this sheet extracts
+    claimed_by: list[str] = field(default_factory=list)
     unextracted: list[str] = field(default_factory=list)
 
     @property

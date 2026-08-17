@@ -103,10 +103,16 @@ class BlockWriter:
             for a in block.attributes.values()
         )
         self._line(f"Attributes: {declared}" if declared else "Attributes: none declared")
-        self._line(
+        counted = (
             f"Records: {block.candidates} candidates, {len(block.records)} extracted, "
             f"{block.excluded} excluded (selector empty)"
         )
+        if block.claimed_elsewhere:
+            counted += (
+                f", {block.claimed_elsewhere} extracted by "
+                f"{' and '.join(block.claimed_by)} on this sheet — one list, two datasets"
+            )
+        self._line(counted)
         self._line(
             "Types applied: "
             + " · ".join(f"{h} → {block.field_types[h].value}" for h in block.fields)

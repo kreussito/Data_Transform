@@ -27,10 +27,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 FIRE = ROOT / "Intake_v1.xlsx"
 ENGINEERING = ROOT / "Intake_Engineering_v1.xlsx"
+COMBINED = ROOT / "Intake_EngineeringCombined_v1.xlsx"
 FIRE_CAT = ROOT / "Intake_FireCat_v1.xlsx"
 FIRE_EQ_WIND = ROOT / "Intake_FireEQWind_v1.xlsx"
 
-ALL = [FIRE, ENGINEERING, FIRE_CAT, FIRE_EQ_WIND]
+ALL = [FIRE, ENGINEERING, FIRE_CAT, FIRE_EQ_WIND, COMBINED]
 
 
 def _blocks(path):
@@ -113,6 +114,131 @@ def test_stacked_blocks_do_not_swallow_each_other():
     assert all(len(b.records) == 6 for b in cat_history)
     first, second = sorted(cat_history, key=lambda b: b.index)
     assert first.records[0].values["Premium"] != second.records[0].values["Premium"]
+
+
+# ──────────────────── one list, two datasets — spec §6.5
+
+def _by_key(blocks):
+    return {b.dataset.key: b for b in blocks}
+
+
+def test_a_block_may_name_its_own_dataset():
+    """The sheet name is a default, not a law — spec §6.4."""
+    _, blocks = _blocks(COMBINED)
+    on_sheet = [b for b in blocks if b.sheet_name == "03. Losses"]
+    assert sorted(b.dataset.key for b in on_sheet) == ["03 Large", "04 Cat"]
+    assert {b.index for b in on_sheet} == {1, 2}
+
+
+def test_two_blocks_overlay_one_list_and_split_it():
+    """Same rows, different selector columns — the selector does the classifying."""
+    _, blocks = _blocks(COMBINED)
+    large, cat = _by_key(blocks)["03 Large"], _by_key(blocks)["04 Cat"]
+
+    assert large.info_ref == "J" and cat.info_ref == "K"
+    assert large.header_ref == "12" and cat.header_ref == "14"
+
+    # Interleaved in the source: rows 16-23, alternating by kind.
+    assert [r.source_ref for r in large.records] == ["16", "18", "19", "22", "23"]
+    assert [r.source_ref for r in cat.records] == ["17", "20", "21"]
+    assert not set(r.source_ref for r in large.records) & set(
+        r.source_ref for r in cat.records
+    ), "no row may belong to both blocks"
+
+
+def test_the_second_extraction_row_is_never_read_as_a_record():
+    """Header_2 sits above the shared records, in the columns block 1 reads."""
+    _, blocks = _blocks(COMBINED)
+    large = _by_key(blocks)["03 Large"]
+    assert "14" not in [r.source_ref for r in large.records]
+    assert "14" not in [r.source_ref for r in large.excluded_records]
+
+
+def test_a_sibling_blocks_rows_are_not_reported_as_excluded():
+    """Nothing was dropped — those rows belong to the other list."""
+    _, blocks = _blocks(COMBINED)
+    large, cat = _by_key(blocks)["03 Large"], _by_key(blocks)["04 Cat"]
+
+    assert large.excluded == 0 and large.claimed_elsewhere == 3
+    assert large.claimed_by == ["04 Cat"]
+    assert cat.excluded == 0 and cat.claimed_elsewhere == 5
+    assert cat.claimed_by == ["03 Large"]
+
+
+def test_a_sibling_blocks_columns_are_not_reported_as_undeclared():
+    _, blocks = _blocks(COMBINED)
+    large, cat = _by_key(blocks)["03 Large"], _by_key(blocks)["04 Cat"]
+    # C, H and I belong to 04; they are declared in 00, just not in 03's dataset.
+    assert large.unextracted == ["B"]        # the claim number, genuinely undeclared
+    assert cat.unextracted == []
+
+
+def test_the_two_engineering_shapes_carry_identical_figures():
+    """One list or two sheets — the same records, and nothing else differs."""
+    _, separate = _blocks(ENGINEERING)
+    _, combined = _blocks(COMBINED)
+
+    def values(blocks):
+        return {b.dataset.role: [r.values for r in b.records] for b in blocks}
+
+    assert values(separate) == values(combined)
+
+
+def test_the_two_engineering_shapes_produce_identical_crosschecks():
+    outcome = []
+    for path in (ENGINEERING, COMBINED):
+        nomenclature, blocks = _blocks(path)
+        outcome.append(sorted(
+            (r.rule.id, r.section, r.year, r.status, r.left_value, r.right_value)
+            for r in run_rules(nomenclature, blocks)
+        ))
+    assert outcome[0] == outcome[1]
+
+
+def test_the_two_engineering_shapes_produce_the_same_loss_check(tmp_path):
+    from datatransform.lossshare import loss_share_tables
+
+    figures = []
+    for path in (ENGINEERING, COMBINED):
+        nomenclature, blocks = _blocks(path)
+        tables = loss_share_tables(nomenclature, blocks)
+        figures.append([(t.kind, t.roles,
+                         [(r.year, r.by_role, r.declared, r.incurred) for r in t.rows])
+                        for t in tables])
+    assert figures[0] == figures[1]
+
+
+def test_stacked_blocks_sharing_a_selector_still_bound_each_other():
+    """The overlay rule must not undo the boundary that stacked blocks need."""
+    _, blocks = _blocks(FIRE_CAT)
+    cat_history = [b for b in blocks if b.sheet_name == "01. History Cat"]
+    assert len(cat_history) == 2
+    assert all(b.info_ref == "L" for b in cat_history)      # shared selector → bounded
+    assert all(len(b.records) == 6 for b in cat_history)
+
+
+def test_a_declared_dataset_key_must_exist_in_sheet_00():
+    from datatransform.extract import _dataset_for_block
+    from datatransform.markers import parse_marker
+
+    nomenclature, _ = _blocks(COMBINED)
+    sheet = load_workbook(COMBINED, data_only=True)["03. Losses"]
+
+    good = [parse_marker("Dataset_2 = 04 Cat", 15)]
+    assert _dataset_for_block(sheet, nomenclature, good, 2, None).key == "04 Cat"
+
+    bad = [parse_marker("Dataset_2 = 04 Catastrophe", 15)]
+    with pytest.raises(ExtractionError, match="not a dataset key in sheet 00"):
+        _dataset_for_block(sheet, nomenclature, bad, 2, None)
+
+
+def test_a_sheet_matching_no_dataset_must_have_its_blocks_named():
+    from datatransform.extract import _dataset_for_block
+
+    nomenclature, _ = _blocks(COMBINED)
+    sheet = load_workbook(COMBINED, data_only=True)["03. Losses"]
+    with pytest.raises(ExtractionError, match="must name one with 'Dataset_1"):
+        _dataset_for_block(sheet, nomenclature, [], 1, None)
 
 
 # ─────────────────────────────────────────────────── role resolution

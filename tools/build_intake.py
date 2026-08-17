@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Generate the reference workbooks for specification_v1.md.
 
-Four treaty shapes, from the same building blocks:
+Five treaty shapes, from the same building blocks:
 
 ===================================== ==================================================
 ``Intake_v1.xlsx``                    Fire only — one per-risk section, both orientations
-``Intake_Engineering_v1.xlsx``        Engineering — one per-risk section
+``Intake_Engineering_v1.xlsx``        Engineering — 03 and 04 on separate sheets
+``Intake_EngineeringCombined_v1.xlsx``  the same treaty, both loss datasets in one list
 ``Intake_FireCat_v1.xlsx``            Fire + Cat — the two cat perils share one sheet
 ``Intake_FireEQWind_v1.xlsx``         Fire + Earthquake + Hurricane — a sheet each
 ===================================== ==================================================
 
-The last two differ only in *where the section-blocks sit*. That is the point: a
-section is a block, and whether the blocks live in one sheet or three is immaterial.
+Two pairs, each making the same point twice. The cat pair differs only in *where the
+section-blocks sit*; the Engineering pair only in whether the two loss datasets share a
+sheet. Layout is not meaning: both pairs are verified to produce identical results.
 
 Run from the repository root:  python tools/build_intake.py
 """
@@ -96,6 +98,7 @@ MARKER_LEGEND = [
     ("Info_i = <col>", "row-wise: this column holds the record selectors, =ROW()"),
     ("Info_i = <row>", "transposed: this row holds the record selectors, =COLUMN()"),
     ("Transpose_i", "block i is transposed"),
+    ("Dataset_i = <key>", "which dataset block i is — defaults to the sheet-name match"),
     ("Section_i = <name>", "which section of the treaty block i belongs to"),
     ("<Attribute> = <value>", "an attribute of the sheet (unsuffixed) or block i (suffixed _i)"),
     ("H_<Attribute> = <val>", "the same, declared as a hypothesis — raises a query"),
@@ -441,6 +444,102 @@ def cat_sheet(wb, name, *, section, title, events, with_claims, extra_attrs=None
     return ws
 
 
+def combined_loss_sheet(wb, name, *, section, title, losses, events):
+    """One loss list, two blocks — spec §6.5.
+
+    An Engineering or Miscellaneous cedent often reports large losses and cat events in
+    a single list. Rather than splitting the sheet, two extraction rows are declared
+    over the same records and **the selector column does the classifying**:
+
+    ``J: =IF($C{row}="", ROW(), "")``   a row with no cat code is a large loss
+    ``K: =IF($C{row}<>"", ROW(), "")``  a row with one is a cat loss
+
+    Nothing is inferred — the cedent's own cat-code column drives it, and a human wrote
+    the formula that says so.
+    """
+    ws = wb.create_sheet(name)
+    put(ws, "B1", title, title_f)
+
+    markers(ws, {
+        2: f"Section = {section}",
+        3: "Currency = USD",
+        4: "Scale = 1,000",
+        5: "Share basis = 100%",
+        6: "H_Year basis = UW",
+        7: "H_Loss basis = Incurred",
+        8: "Date format = ISO",
+        9: "Threshold = 500",
+        10: "Occurrence year from = Event Date",
+        12: "Header_1",
+        13: "Dataset_1 = 03 Large",
+        14: "Header_2",
+        15: "Dataset_2 = 04 Cat",
+        26: "Info_1 = J",
+        27: "Info_2 = K",
+        28: "As at = 31.12.2025",
+    })
+
+    for ref, text in [("B11", "Claim no."), ("C11", "Cat code"), ("D11", "U/W Yr"),
+                      ("E11", "Description"), ("F11", "Gross incurred"), ("G11", "From"),
+                      ("H11", "To"), ("I11", "Claims")]:
+        put(ws, ref, text, inert_f)
+    put(ws, "K11", "← source header, never read", sub_f)
+
+    # Two extraction rows over one list. Each names only the fields its dataset declares.
+    for ref, text in [("D12", "Year"), ("E12", "Name of Loss"), ("F12", "Loss amount"),
+                      ("G12", "Date of Loss")]:
+        put(ws, ref, text, head_f, blue)
+    put(ws, "K12", "← extraction row: large losses", sub_f)
+
+    for ref, text in [("C14", "Event ID"), ("D14", "Year"), ("E14", "Event Name"),
+                      ("F14", "Loss amount"), ("G14", "Event Date"),
+                      ("H14", "Event End Date"), ("I14", "Number of Claims")]:
+        put(ws, ref, text, head_f, green)
+    put(ws, "K14", "← extraction row: cat events", sub_f)
+
+    # One list, interleaved as the cedent sent it — ordered by year, not by kind.
+    rows, n = [], 0
+    for year, what, amount, when in losses:
+        n += 1
+        rows.append({"B": f"CL-{2200 + n}", "D": year, "E": what, "F": amount, "G": when})
+    for event_id, event_name, start, end, split in events:
+        for year, amount, claims in split:
+            rows.append({"C": event_id, "D": year, "E": event_name, "F": amount,
+                         "G": start, "H": end, "I": claims})
+    rows.sort(key=lambda r: (str(r["D"]), r["G"]))
+
+    first = 16
+    for offset, row in enumerate(rows):
+        r = first + offset
+        for col, value in row.items():
+            fmt = {"D": "@", "F": "#,##0", "G": "yyyy-mm-dd",
+                   "H": "yyyy-mm-dd", "I": "#,##0"}.get(col)
+            put(ws, f"{col}{r}", value, body_f, fmt=fmt)
+        is_cat = "C" in row
+        put(ws, f"J{r}", None if is_cat else f'=IF($C{r}="",ROW(),"")', mono_f)
+        put(ws, f"K{r}", None if not is_cat else f'=IF($C{r}<>"",ROW(),"")', mono_f)
+        # openpyxl writes no cached value; supply the one Excel would compute.
+        if is_cat:
+            put(ws, f"K{r}", f'=IF($C{r}<>"",ROW(),"")', mono_f)
+        else:
+            put(ws, f"J{r}", f'=IF($C{r}="",ROW(),"")', mono_f)
+
+    put(ws, f"B{first + len(rows) + 1}",
+        "One list. Column J selects the large losses, column K the cat events; both "
+        "read the cedent's own cat-code column. No row is in both, and none is lost.",
+        sub_f)
+
+    widths(ws, {"A": 34, "B": 12, "C": 11, "D": 10, "E": 34, "F": 14, "G": 13,
+                "H": 13, "I": 9, "J": 10, "K": 46})
+    # The selector formulas the tool cannot evaluate — the builder knows the answers.
+    cached = {}
+    for offset, row in enumerate(rows):
+        r = first + offset
+        cached[(name, f"J{r}")] = "" if "C" in row else r
+        cached[(name, f"K{r}")] = r if "C" in row else ""
+    return ws, cached
+
+
 def multi_section_sheet(wb, name, *, title, kind, blocks_spec):
     """One sheet carrying several section-blocks, stacked — spec §2.3.
 
@@ -562,14 +661,7 @@ def build_engineering():
     )
     loss_sheet(
         wb, "03. Large Losses", section="Engineering",
-        title="03. Large Losses — Engineering",
-        losses=[
-            ("2021", "Turbine erection collapse, Gdansk", 1420, date(2021, 4, 8)),
-            ("2023", "Tunnel boring machine damage, Oslo", 2310, date(2023, 3, 22)),
-            ("2023", "Crane failure, Rotterdam yard", 860, date(2023, 10, 4)),
-            ("2024", "Generator fire, Valencia plant", 1975, date(2024, 7, 30)),
-            ("2025", "Cable laying barge grounding, Kiel", 1180, date(2025, 5, 12)),
-        ],
+        title="03. Large Losses — Engineering", losses=ENGINEERING_LOSSES,
     )
     cat_sheet(
         wb, "04. Cat Losses", section="Engineering",
@@ -734,15 +826,68 @@ def build_fire_eq_wind():
     return wb, "Intake_FireEQWind_v1.xlsx"
 
 
+ENGINEERING_LOSSES = [
+    ("2021", "Turbine erection collapse, Gdansk", 1420, date(2021, 4, 8)),
+    ("2023", "Tunnel boring machine damage, Oslo", 2310, date(2023, 3, 22)),
+    ("2023", "Crane failure, Rotterdam yard", 860, date(2023, 10, 4)),
+    ("2024", "Generator fire, Valencia plant", 1975, date(2024, 7, 30)),
+    ("2025", "Cable laying barge grounding, Kiel", 1180, date(2025, 5, 12)),
+]
+
+
+def build_engineering_combined():
+    """The same Engineering treaty, with the losses arriving in **one list**.
+
+    Identical figures to ``Intake_Engineering_v1.xlsx``; the only difference is that
+    ``03`` and ``04`` share a sheet and are told apart by their selector columns.
+    """
+    wb = Workbook()
+    wb.remove(wb.active)
+    sections = [("Engineering", "per risk", ["01", "02", "03", "04"])]
+    datasets = [
+        ("01. History", "01 History", HEADERS_01, ATTRS_01),
+        ("02. EPI Projections", "02 EPI", HEADERS_02, ATTRS_02),
+        ("03. Losses", "03 Large", HEADERS_03, ATTRS_03),
+        ("04. Cat Losses", "04 Cat", HEADERS_04, ATTRS_04),
+    ]
+    build_sheet00(wb, treaty_type="Engineering", sections=sections, datasets=datasets)
+
+    history_sheet(
+        wb, "01. History", section="Engineering",
+        title="01. History — Engineering",
+        years=YEARS,
+        policies=[410, 435, 452, 468, 480, 372],
+        premium=[8200, 8640, 9100, 9480, 9900, 7420],
+        incurred=[5100, 6350, 4820, 7240, 5680, 3910],
+    )
+    epi_sheet(
+        wb, "02. EPI Projections", section="Engineering",
+        title="02. EPI Projections — Engineering",
+        periods=PERIODS, epi=_epi(9900, 7420, 9450, 10600),
+        shares=[1.0, 0.75, 1.0, 1.0],
+    )
+    _, cached = combined_loss_sheet(
+        wb, "03. Losses", section="Engineering",
+        title="03. Losses — Engineering (large losses and cat events in one list)",
+        losses=ENGINEERING_LOSSES, events=ENGINEERING_EVENTS,
+    )
+    return wb, "Intake_EngineeringCombined_v1.xlsx", cached
+
+
 def main():
     from datatransform.recalc import inject
 
-    for builder in (build_engineering, build_fire_cat, build_fire_eq_wind):
-        wb, name = builder()
+    builders = (build_engineering, build_fire_cat, build_fire_eq_wind,
+                build_engineering_combined)
+    for builder in builders:
+        built = builder()
+        wb, name = built[0], built[1]
+        overrides = built[2] if len(built) > 2 else {}
         path = ROOT / name
         wb.save(path)
-        result = inject(path)
-        print(f"{name:32} {len(wb.sheetnames)} sheets, "
+        result = inject(path, [(sheet, ref, value)
+                               for (sheet, ref), value in overrides.items()])
+        print(f"{name:34} {len(wb.sheetnames)} sheets, "
               f"{result['injected']} formula values cached")
 
 

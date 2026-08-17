@@ -11,9 +11,12 @@ from dataclasses import dataclass
 
 from .nomenclature import norm
 
-STRUCTURAL = ("Header", "Info", "Transpose")
+# ``Section`` is deliberately not here: it is an attribute of the data (which part of
+# the treaty these figures describe), and belongs in the attribute list a reviewer reads.
+# ``Dataset`` is structure — which dataset the block *is* — so it stays out of that list.
+STRUCTURAL = ("Header", "Info", "Transpose", "Dataset")
 
-# Header_1 / Info_2 = L / Transpose_1 / H_Year basis_1 = UW / Currency = USD
+# Header_1 / Info_2 = L / Transpose_1 / Dataset_2 = 04 Cat / H_Year basis_1 = UW
 MARKER = re.compile(
     r"^(?P<hyp>H_)?(?P<name>[^=]+?)(?:_(?P<index>\d+))?\s*(?:=\s*(?P<value>.*))?$"
 )
