@@ -83,6 +83,8 @@ VOCABULARY = [
     ("Loss basis", "Paid | Incurred"),
     ("PF transfer", "with clean cut | without clean cut | none"),
     ("Exposure basis", "Sum Insured | EML | PML | MPL"),
+    ("Includes fac", "yes | no"),
+    ("Layered business", "included | excluded"),
     ("Scale", "1 | 1,000 | 1,000,000"),
     ("Share basis", "100% | ceded only"),
     ("Date format", "ISO | DD.MM.YYYY | MM/DD/YYYY"),
@@ -125,8 +127,18 @@ RULES = [
 
 # Declared in the order a profile is read: what it is, where it sits, what it earns,
 # then what it is made of. Step 2 writes the columns in exactly this order — spec §9.2 S2.
-HEADERS_05 = ["Band", "Band from", "Band to", "Premium", "Number of Risks", "Exposure"]
-ATTRS_05 = ["Section", "Currency", "Scale", "Exposure basis", "As at"]
+#
+# The bounds are optional because a band arrives either way: as two numeric columns, or
+# as one label ("1 - 10,000"). Where they are absent step 2 reads them off the label and
+# says so — interpretation belongs to step 2, never to step 1 (S11).
+HEADERS_05 = ["Band", "Band from (optional)", "Band to (optional)",
+              "Premium", "Number of Risks", "Exposure"]
+
+# A profile is a snapshot of a portfolio, and three things decide whether its figures are
+# comparable with anything else: whose share it is, whether facultative business is in it,
+# and whether layered risks were flattened. Declared, so the question gets answered.
+ATTRS_05 = ["Section", "Currency", "Scale", "Share basis", "Exposure basis",
+            "Includes fac", "Layered business", "As at"]
 
 PROVISIONAL = [
     ("05. Risk Profiles", "05 Profile", HEADERS_05, ATTRS_05),

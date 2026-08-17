@@ -97,9 +97,13 @@ datasets = [
     # Declared in the order a profile is read; step 2 writes the columns in exactly
     # this order — spec §9.2 S2. Section was missing here and is not optional: a
     # profile belongs to a section like every other dataset.
+    # Bounds are optional: a band arrives either as two numeric columns or as one
+    # label ("1 - 10,000"). Where absent, step 2 reads them off the label and says so.
     (9, "05. Risk Profiles", "05 Profile",
-     ["Band", "Band from", "Band to", "Premium", "Number of Risks", "Exposure"],
-     ["Section", "Currency", "Scale", "Exposure basis", "As at"], True),
+     ["Band", "Band from (optional)", "Band to (optional)",
+      "Premium", "Number of Risks", "Exposure"],
+     ["Section", "Currency", "Scale", "Share basis", "Exposure basis",
+      "Includes fac", "Layered business", "As at"], True),
     (10, "01. History_Transposed", "01 History_T",
      ["Year", "Premium", "Incurred Losses"], ATTRS_01, False),
     (11, "02. EPI Projections_Transposed", "02 EPI_T",
@@ -172,6 +176,8 @@ for name, values in [
     ("Loss basis", "Paid | Incurred"),
     ("PF transfer", "with clean cut | without clean cut | none"),
     ("Exposure basis", "Sum Insured | EML | PML | MPL"),
+    ("Includes fac", "yes | no"),
+    ("Layered business", "included | excluded"),
     ("Scale", "1 | 1,000 | 1,000,000"),
     ("Share basis", "100% | ceded only"),
     ("Date format", "ISO | DD.MM.YYYY | MM/DD/YYYY"),

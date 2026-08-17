@@ -143,25 +143,68 @@ the columns in exactly that order (§9.2 S2), so the declaration *is* the layout
 | Field | Type | |
 |---|---|---|
 | `Band` | text | the cedent's own label — the record identity, verbatim |
-| `Band from` | number | lower bound, inclusive |
-| `Band to` | number | upper bound |
+| `Band from` | number | lower bound — **optional** |
+| `Band to` | number | upper bound — **optional** |
 | `Premium` | number | |
 | `Number of Risks` | number | |
 | `Exposure` | number | on the declared basis |
 
-Attributes: `Section · Currency · Scale · Exposure basis · As at`.
+Attributes: `Section · Currency · Scale · Share basis · Exposure basis · Includes fac ·
+Layered business · As at`.
 
-**Why the bounds are numeric and separate from the label.** Two reasons, and both are
-fatal to a single text column. Natural alphanumeric sorting reads `"1,000 – 5,000"` as
-the digits `1` then `000`, so it would sort *before* `"500 – 1,000"`. And exposure rating
-a layer of 2,000 xs 1,000 has to allocate it across bands, which cannot be done against
-bounds that exist only as prose. The label is kept for identity — never parsed, exactly
-as `Year` is (§8.4) — and the numbers are what the machine works with.
+**Why the bounds are numeric and separate from the label.** Natural alphanumeric sorting
+reads `"1,000 – 5,000"` as the digits `1` then `000`, so it would sort *before*
+`"500 – 1,000"`. And exposure rating a layer of 2,000 xs 1,000 has to allocate it across
+bands, which cannot be done against bounds that exist only as prose. The label is kept
+for identity — never parsed, exactly as `Year` is (§8.4) — and the numbers are what the
+machine works with.
+
+**Why the bounds are optional.** A band arrives either way: as two numeric columns, or as
+a single label — `1-10,000`, `10,001 - 20,000`, `> 1,000,000`. Where the columns exist
+they are extracted. Where they do not, **step 2 reads the bounds off the label** and
+writes what it read. That division is not a convenience: step 1 carries only what the
+sheet says (S11), and reading `1` and `10,000` out of `"1-10,000"` is interpretation.
+
+The parse follows the same discipline as decimals (§8.4): **unambiguous forms are read,
+ambiguous ones are fatal.** A label nobody can read without guessing stops the run and
+names itself, and the escape hatch is always to add the two numeric columns.
+
+An open bound is an *absent* bound, not a zero: `> 1,000,000` gives `Band from` and
+leaves `Band to` empty; `< 10,000` does the reverse. Empty stays empty (§8.4).
+
+**Continuity** is checked but not over-specified, because both conventions are in use:
+
+```
+0 – 10,000 · 10,000 – 20,000      shared boundary
+1 – 10,000 · 10,001 – 20,000      gapless integers
+```
+
+So a gap is reported only where the next band starts **more than one unit** above the
+previous band's end, and an overlap only where it starts *below* it. Either convention
+passes; a band genuinely missing from the middle of a profile does not.
 
 **Why the field is `Exposure`, not `Sum Insured`.** `Exposure basis` may declare `EML`,
 `PML` or `MPL`. A field name carries one meaning across the workbook (§3.3), so a column
 headed `Sum Insured` holding an EML figure would be a false label in the output. The
-field says what it is; the attribute says on what basis.
+field says what it is; the attribute says on what basis. In practice a profile is on sums
+insured rather than PMLs, and that is what the attribute will usually say.
+
+**Three attributes decide whether the figures are comparable with anything else:**
+
+| Attribute | | |
+|---|---|---|
+| `Share basis` | `100%` · `ceded only` | usually gross; ceded is the exception |
+| `Includes fac` | `yes` · `no` | facultative business is normally in the profile and often reinsured separately, so a profile including it overstates what the treaty sees |
+| `Layered business` | `included` · `excluded` | a risk written in layers has no single band |
+
+None of these can be inferred from the numbers, and each of them changes what a
+comparison against `01` means — so each is declared, and an undeclared one ranks `Open`.
+
+**Several profiles in one sheet need no new machinery.** A profile is a snapshot at a
+date, so a pack showing two or three years carries one **block per profile**, each with
+its own `As at_i`. Whether the blocks sit one below the other or side by side is already
+handled: stacked blocks share a selector column, side-by-side blocks use different ones,
+and §6.5 tells them apart without anyone declaring which arrangement it is.
 
 ---
 
