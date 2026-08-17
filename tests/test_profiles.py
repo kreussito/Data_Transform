@@ -234,6 +234,64 @@ def test_step_2_is_value_preserving():
     assert block.totals() == result.totals()
 
 
+# ────────────────── one profile, three presentations — spec §2.4
+
+def _demo(tmp_path):
+    """The three-shape demonstration workbook, built fresh."""
+    import sys
+
+    sys.path.insert(0, str(ROOT / "tools"))
+    from demo_profile_shapes import build
+
+    path, _, _ = build(tmp_path / "shapes.xlsx")
+    nomenclature, blocks = _read(path)
+    return path, {b.sheet_name: (b, apply_step2(b, step2_for(b.dataset.key), nomenclature))
+                  for b in blocks}
+
+
+def test_three_presentations_of_one_profile_agree(tmp_path):
+    """Bounds in two columns, inside one label, or in European grouping — same profile."""
+    _, shapes = _demo(tmp_path)
+    assert set(shapes) == {"05. Profile two columns", "05. Profile one column",
+                           "05. Profile European"}
+
+    def figures(result):
+        return [(r.values["Band from"], r.values["Band to"], r.values["Premium"],
+                 r.values["Number of Risks"], r.values["Exposure"])
+                for r in result.records]
+
+    reference = figures(shapes["05. Profile two columns"][1])
+    assert reference[0][:2] == (1.0, 1_000_000.0)          # the bounds you named
+    assert reference[-1][:2] == (25_000_000.0, None)       # open at the top
+    for name, (_, result) in shapes.items():
+        assert figures(result) == reference, name
+        assert result.totals()["Premium"] == 8_000_000.0
+
+
+def test_only_the_declared_shape_extracts_the_bounds_in_step_1(tmp_path):
+    _, shapes = _demo(tmp_path)
+    two_columns = shapes["05. Profile two columns"]
+    one_column = shapes["05. Profile one column"]
+
+    assert "Band from" in two_columns[0].fields
+    assert two_columns[1].derived_fields == ()
+
+    assert "Band from" not in one_column[0].fields
+    assert one_column[1].derived_fields == ("Band from", "Band to")
+
+
+def test_both_thousands_conventions_are_read(tmp_path):
+    """1-1,000,000 and 1-1.000.000 both group unambiguously, so neither is guessed."""
+    _, shapes = _demo(tmp_path)
+    anglo = shapes["05. Profile one column"][1]
+    european = shapes["05. Profile European"][1]
+
+    assert anglo.records[0].values["Band"] == "1-1,000,000"
+    assert european.records[0].values["Band"] == "1-1.000.000"
+    assert [r.values["Band from"] for r in anglo.records] == \
+           [r.values["Band from"] for r in european.records]
+
+
 # ───────────────────────────────────────────────────────── end to end
 
 @pytest.mark.parametrize("path", [FIRE, ENGINEERING, COMBINED, FIRE_CAT, FIRE_EQ_WIND])

@@ -1210,6 +1210,17 @@ Resolved:
 | Dataset with no step-2 spec | **Nothing written**, run reports an error — §9.1 O7 |
 | Loss-share threshold | **20%**, declared in `⟦GLOBAL⟧` so an underwriter can change it |
 
+### 13.1 Parked — decided against for now, or awaiting a decision
+
+Each of these is a real gap with a known shape. None is a defect: the tool refuses
+cleanly in every case, and none is worth building before the decision behind it is made.
+
+| | What | Why it is parked |
+|---|---|---|
+| **P1** | **`05` ↔ `01` premium comparison.** Σ profile premium against the portfolio premium for the same period | `Includes fac` means the two *legitimately* differ, so it cannot be a pass/fail rule. It wants a §10.3-style comparison block naming the attributes that explain the gap — and which premium it ties to (`01` actual or `02` EPI re-estimate) is not yet decided |
+| **P2** | **A declared number format.** `⟦GLOBAL⟧ Number format = 1,000.00` \| `1.000,00`, mirroring `Date format` | `1,000` is genuinely ambiguous — one separator, exactly three trailing digits — so it is refused (§8.4). `1,000,000` and `1.000.000` both group unambiguously and are read. A declared convention would settle the four-digit case everywhere at once, not just in band labels |
+| **P3** | **`@*` — every record.** `SUM(05.Premium@*)` | Every record selector today is year-shaped, so a dataset whose records are bands cannot be summed in a rule. No rule needs it until `08` exists and two non-year tables must tie |
+
 Remaining:
 
 1. **Datasets `06`–`10`.** Header labels and attributes not yet specified.
