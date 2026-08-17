@@ -143,12 +143,20 @@ class Nomenclature:
                 break                       # the register ends where the next block begins
             if not sheet_name or not key:
                 continue
-            headers = tuple(
+            declared = [
                 h for h in (
                     norm(ws.cell(row=row, column=c).value)
                     for c in range(HEADER_COL_FIRST, HEADER_COL_LAST + 1)
                 ) if h
-            )
+            ]
+            headers, optional = [], []
+            for label in declared:
+                # "Number of Claims (optional)" — the name a human writes is the name
+                # without the annotation; the annotation is metadata about the name.
+                bare = re.sub(r"\s*\(optional\)\s*$", "", label, flags=re.I)
+                headers.append(bare)
+                if bare != label:
+                    optional.append(bare)
             attributes = tuple(
                 a for a in (
                     norm(ws.cell(row=row, column=c).value)
@@ -157,7 +165,8 @@ class Nomenclature:
             )
             if not headers:
                 continue
-            datasets[sheet_name] = Dataset(sheet_name, key, headers, attributes)
+            datasets[sheet_name] = Dataset(sheet_name, key, tuple(headers),
+                                           attributes, tuple(optional))
 
         return cls(
             datasets,

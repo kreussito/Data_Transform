@@ -90,6 +90,14 @@ class BlockWriter:
             "Fields resolved by label: "
             + " · ".join(f"{k} → {v}" for k, v in block.address_map.items())
         )
+        absent = [h for h in block.dataset.headers if h not in block.address_map]
+        if absent:
+            # Declared optional in sheet 00 and not supplied here. Saying so is the
+            # difference between "the cedent did not report it" and "the tool lost it".
+            self._line(
+                "Declared optional in sheet 00, absent from this block: "
+                + ", ".join(absent)
+            )
         declared = " · ".join(
             f"{a.name} = {a.value}{' (hypothesis)' if a.is_hypothesis else ''}"
             for a in block.attributes.values()
@@ -101,7 +109,7 @@ class BlockWriter:
         )
         self._line(
             "Types applied: "
-            + " · ".join(f"{h} → {block.field_types[h].value}" for h in ds.headers)
+            + " · ".join(f"{h} → {block.field_types[h].value}" for h in block.fields)
         )
         notable = [c for c in block.coercions if not c.routine]
         if notable:
@@ -132,7 +140,7 @@ class BlockWriter:
                 self.row += 1
             self.row += 1
 
-        columns = [block.provenance_label, *ds.headers]
+        columns = [block.provenance_label, *block.fields]
         if block.orientation.value == "transposed":
             columns.append("Confidence")
 
@@ -143,16 +151,16 @@ class BlockWriter:
         first_data = self.row
         for record in block.records:
             self._put(FIRST_COL, record.source_ref, body_f)
-            for i, label in enumerate(ds.headers, start=1):
+            for i, label in enumerate(block.fields, start=1):
                 self._put(FIRST_COL + i, record.values.get(label), body_f,
                           block.number_format(label))
             if block.orientation.value == "transposed":
-                self._put(FIRST_COL + len(ds.headers) + 1,
+                self._put(FIRST_COL + len(block.fields) + 1,
                           record.confidence.value if record.confidence else "", note_f)
             self.row += 1
         last_data = self.row - 1
 
-        self._write_controls(block, ds.headers, first_data, last_data, block.totals())
+        self._write_controls(block, block.fields, first_data, last_data, block.totals())
         self._write_excluded_note(block)
 
     def _write_controls(self, block, headers, first_data, last_data, totals):
@@ -195,7 +203,7 @@ class BlockWriter:
             for m in block.numeric_fields
         }
         self._put(FIRST_COL, "Excluded records, measure totals", note_f)
-        for i, label in enumerate(block.dataset.headers, start=1):
+        for i, label in enumerate(block.fields, start=1):
             if label not in block.numeric_fields:
                 continue
             self._put(FIRST_COL + i, totals.get(label), note_f, block.number_format(label))
@@ -281,13 +289,16 @@ class BlockWriter:
         self._write_crosschecks(result.block)
 
     def _write_aggregate(self, result: Step2Result) -> None:
-        """The second step-2 table — spec §9.2.1 S14."""
-        table = result.aggregate
-        if table is None:
-            return
+        """Further step-2 tables, one per declared aggregate — spec §9.2.1 S14."""
+        for table in result.aggregates:
+            self._write_one_aggregate(result, table)
+
+    def _write_one_aggregate(self, result: Step2Result, table) -> None:
         self.row += 2
         self._put(FIRST_COL, table.title, head_f, fill=step2_fill)
         self.row += 1
+        if table.note:
+            self._line(table.note)
         if table.zero_filled:
             self._line(f"Years with no record are shown as 0: {', '.join(table.zero_filled)}")
 
@@ -349,15 +360,21 @@ class BlockWriter:
             self.row += 1
 
 
-def write_blocks(ws, block: Block, result: Step2Result | None) -> list[tuple[str, str, float]]:
+def write_blocks(ws, block: Block, result: Step2Result | None,
+                 clear: bool = True) -> list[tuple[str, str, float]]:
     """Write step 1 and, where one is defined, step 2 — spec §9.1.
 
     A dataset with no step-2 spec still gets its extraction written. Step 1 is
     auditable on its own: it is what the sheet says, verified by its own control sums.
+
+    ``clear`` removes output from an earlier run. A sheet carrying several
+    section-blocks is written one block at a time, so only the first call may clear —
+    otherwise each block would erase the block written before it.
     """
     from .extract import last_non_empty_row
 
-    clear_generated(ws)
+    if clear:
+        clear_generated(ws)
     start = last_non_empty_row(ws) + 1 + GAP
     writer = BlockWriter(ws, start)
     writer.write_step1(block)

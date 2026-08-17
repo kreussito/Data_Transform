@@ -132,6 +132,30 @@ def _resolve_attributes(block: Block, markers, nomenclature: Nomenclature) -> No
             )
 
 
+def _occurrence_date_field(block: Block) -> str | None:
+    """The one date that defines the occurrence year — spec §9.2.1 S15, §10.2.
+
+    A cat event carries two dates, and only the one the cedent counts from can be
+    checked against the year. An event running 2024-12-30 → 2025-01-02 is not
+    misfiled because its *end* falls in the following year; comparing every date
+    field would report that as an error.
+    """
+    dates = [h for h in block.fields if block.field_types.get(h) is FieldType.DATE]
+    if not dates:
+        return None
+    declared = block.attributes.get("Occurrence year from")
+    if declared is not None:
+        named = norm(declared.value)
+        if named not in dates:
+            raise ExtractionError(
+                f"{block.sheet_name!r} block {block.index}: "
+                f"'Occurrence year from' = {named!r}, which is not a date field of "
+                f"this block ({', '.join(dates)})"
+            )
+        return named
+    return dates[0]
+
+
 def _check_occurrence_year(block: Block) -> None:
     """Under an occurrence basis the year must match the loss date — spec §10.2.
 
@@ -144,9 +168,8 @@ def _check_occurrence_year(block: Block) -> None:
         return
 
     key = block.dataset.key_field
-    date_fields = [h for h in block.dataset.headers
-                   if block.field_types.get(h) is FieldType.DATE]
-    if not date_fields:
+    field_name = _occurrence_date_field(block)
+    if field_name is None:
         return
 
     mismatched = []
@@ -155,10 +178,9 @@ def _check_occurrence_year(block: Block) -> None:
         match = LEADING_NUMBER.match(label) if isinstance(label, str) else None
         if match is None:
             continue
-        for field_name in date_fields:
-            value = record.values.get(field_name)
-            if value is not None and value.year != int(match.group(1)):
-                mismatched.append(f"{record.source_ref}: {label} vs {value.isoformat()}")
+        value = record.values.get(field_name)
+        if value is not None and value.year != int(match.group(1)):
+            mismatched.append(f"{record.source_ref}: {label} vs {value.isoformat()}")
 
     if mismatched:
         block.hypotheses.append(
@@ -242,7 +264,7 @@ def _resolve_labels(cells: list[tuple], dataset: Dataset, where: str) -> dict[st
                 f"{where}: label {label!r} appears {len(refs)} times in the extraction "
                 f"row/column — ambiguous"
             )
-    missing = [h for h in dataset.headers if h not in hits]
+    missing = [h for h in dataset.headers if h not in hits and not dataset.is_optional(h)]
     if missing:
         raise ExtractionError(
             f"{where}: label(s) {missing} declared in sheet 00 but absent from the "

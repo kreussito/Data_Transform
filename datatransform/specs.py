@@ -49,12 +49,19 @@ class AggregateSpec:
     ``zero_fill_from`` names a dataset whose year window the table should span, so a
     year with no records shows 0 rather than being absent. A missing year reads as
     "no data"; a zero reads as "nothing happened", and only one of those is true.
+
+    ``group_by_attribute`` names an attribute that may redirect the grouping — spec
+    §9.2.1 S15. Which date defines the occurrence year is the cedent's convention, not
+    the tool's, so ``Occurrence year from = Event End Date`` changes the table without
+    changing the code.
     """
 
     title: str
-    group_by: str
+    group_by: str                     # a field, or ``year(<date field>)``
     measures: tuple[str, ...]
     zero_fill_from: str | None = None
+    group_by_attribute: str | None = None
+    note: str = ""
 
 
 @dataclass(frozen=True)
@@ -70,7 +77,7 @@ class Step2Spec:
     ascending: bool = True
     calculations: tuple[Calculation, ...] = field(default_factory=tuple)
     figures: tuple[DerivedFigure, ...] = field(default_factory=tuple)
-    aggregate: AggregateSpec | None = None
+    aggregates: tuple[AggregateSpec, ...] = field(default_factory=tuple)
 
 
 STEP2: dict[str, Step2Spec] = {
@@ -110,21 +117,42 @@ STEP2: dict[str, Step2Spec] = {
     "04 Cat": Step2Spec(
         sort_by=("Year", "Event Date"),
         ascending=True,
-        aggregate=AggregateSpec(
-            title="Annual sum of cat losses",
-            group_by="Year",
-            measures=("Loss amount",),
-            zero_fill_from="01",
+        aggregates=(
+            AggregateSpec(
+                title="Annual sum of cat losses",
+                group_by="Year",
+                measures=("Loss amount",),
+                zero_fill_from="01",
+                note="on the treaty's year basis — this is the table that ties to 01",
+            ),
+            AggregateSpec(
+                title="By occurrence year",
+                group_by="year(Event Date)",
+                measures=("Loss amount",),
+                group_by_attribute="Occurrence year from",
+                note="informational: an event may fall in several underwriting years, "
+                     "so this does not tie to 01 unless the treaty is on an "
+                     "occurrence-year basis",
+            ),
+            AggregateSpec(
+                title="By event",
+                group_by="Event ID",
+                measures=("Loss amount",),
+                note="what the event actually cost — the figure a cat layer is priced "
+                     "against, and the one no annual row shows",
+            ),
         ),
     ),
     "03 Large": Step2Spec(
         sort_by=("Year", "Date of Loss"),
         ascending=True,
-        aggregate=AggregateSpec(
-            title="Annual sum of large losses",
-            group_by="Year",
-            measures=("Loss amount",),
-            zero_fill_from="01",
+        aggregates=(
+            AggregateSpec(
+                title="Annual sum of large losses",
+                group_by="Year",
+                measures=("Loss amount",),
+                zero_fill_from="01",
+            ),
         ),
     ),
 }

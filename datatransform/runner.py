@@ -217,7 +217,10 @@ def _extract_sheet_outcome(title, values_wb, formulas_wb, nomenclature,
 
 def _write_sheet(outcome, out_wb, nomenclature, blocks,
                  debug, process, formula_values) -> None:
-    for block in outcome.blocks:
+    for index, block in enumerate(outcome.blocks):
+        # Only the first block of a sheet clears the previous run's output; the rest
+        # append beneath it, so every section-block of a stacked sheet is written.
+        clear = index == 0
         spec = step2_for(block.dataset.key)
         if spec is None:
             # Extraction is auditable on its own; only the transformation is missing.
@@ -226,12 +229,14 @@ def _write_sheet(outcome, out_wb, nomenclature, blocks,
             process.info("")
             process.info("%s — extracted, but no step-2 spec for %s; step 1 only.",
                          outcome.sheet, block.dataset.key)
-            formula_values.extend(write_blocks(out_wb[outcome.sheet], block, None))
+            formula_values.extend(
+                write_blocks(out_wb[outcome.sheet], block, None, clear))
             _log_block(block, None, debug, process)
             continue
 
         result = apply_step2(block, spec, nomenclature, blocks)
-        formula_values.extend(write_blocks(out_wb[outcome.sheet], block, result))
+        formula_values.extend(
+            write_blocks(out_wb[outcome.sheet], block, result, clear))
         outcome.results.append(result)
         _log_block(block, result, debug, process)
 
@@ -268,11 +273,15 @@ def _log_block(block: Block, result: Step2Result | None, debug, process):
                  block.header_ref, block.info_ref)
     process.info("  Fields resolved by label: %s.",
                  ", ".join(f"{k} → {v}" for k, v in block.address_map.items()))
+    absent = [h for h in block.dataset.headers if h not in block.address_map]
+    if absent:
+        process.info("  Declared optional in sheet 00 and absent here: %s.",
+                     ", ".join(absent))
     process.info("  %d candidate record(s); %d extracted, %d excluded because the selector "
                  "was empty.", block.candidates, len(block.records), block.excluded)
     process.info("  Types applied: %s.",
                  ", ".join(f"{h} read as {block.field_types[h].value}"
-                           for h in block.dataset.headers))
+                           for h in block.fields))
     for c in block.coercions:
         debug.debug("%s: converted %s at %s: %r -> %r (%s)",
                     key, c.field, c.source_ref, c.before, c.after, c.note)

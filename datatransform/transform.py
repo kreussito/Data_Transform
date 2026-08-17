@@ -31,6 +31,7 @@ class AggregateTable:
     measures: tuple[str, ...]
     rows: list[tuple]                       # (group value, {measure: total})
     zero_filled: list[str] = field(default_factory=list)
+    note: str = ""
 
     def totals(self) -> dict[str, float]:
         return {m: sum(values.get(m, 0.0) for _, values in self.rows) for m in self.measures}
@@ -44,12 +45,12 @@ class Step2Result:
     computed: dict[str, list[float | None]] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     figures: list[Figure] = field(default_factory=list)
-    aggregate: AggregateTable | None = None
+    aggregates: list[AggregateTable] = field(default_factory=list)
 
     @property
     def declared_columns(self) -> tuple[str, ...]:
-        """Exactly the order sheet 00 declares — spec §9.2 S2."""
-        return tuple(self.block.dataset.headers)
+        """Exactly the order sheet 00 declares, less any absent optional field."""
+        return self.block.fields
 
     @property
     def columns(self) -> tuple[str, ...]:
@@ -153,13 +154,54 @@ def _derived_figures(block: Block, spec: Step2Spec, actual_year: int | None):
     return out
 
 
+DERIVED_GROUP = re.compile(r"^year\((.+)\)$", re.I)
+
+
+def _group_key(record, group_by: str):
+    """The value a record groups under — a field, or ``year(<date field>)``.
+
+    An event may span underwriting years, so grouping by the *occurrence* year means
+    reading it off the date rather than the declared year — spec §9.2.1 S15.
+    """
+    derived = DERIVED_GROUP.match(group_by.strip())
+    if not derived:
+        return record.values.get(group_by)
+    value = record.values.get(derived.group(1).strip())
+    return str(value.year) if hasattr(value, "year") else None
+
+
+def _resolve_group_by(block: Block, spec: AggregateSpec) -> str:
+    """The grouping actually used, after any attribute redirects it — spec §9.2.1 S15.
+
+    ``year(Event Date)`` is the tool's default reading of "occurrence year". A cedent
+    who defines it by when the event *ended* says so in column A, and the table follows
+    without the code being touched.
+    """
+    if not spec.group_by_attribute:
+        return spec.group_by
+    attribute = block.attributes.get(spec.group_by_attribute)
+    if attribute is None:
+        return spec.group_by
+
+    field = str(attribute.value).strip()
+    if field not in block.fields:
+        raise ExtractionError(
+            f"{block.sheet_name!r} block {block.index}: "
+            f"{spec.group_by_attribute} = {field!r}, which the block does not extract "
+            f"(it has {', '.join(block.fields)})"
+        )
+    derived = DERIVED_GROUP.match(spec.group_by.strip())
+    return f"year({field})" if derived else field
+
+
 def _aggregate(block: Block, spec: AggregateSpec, blocks) -> AggregateTable:
     """Group and sum, spanning the declared year window — spec §9.2.1 S14."""
     from .crosschecks import split_label, years_in
 
+    group_by = _resolve_group_by(block, spec)
     totals: dict[str, dict[str, float]] = {}
     for record in block.records:
-        key = record.values.get(spec.group_by)
+        key = _group_key(record, group_by)
         if key is None:
             continue
         bucket = totals.setdefault(str(key), {m: 0.0 for m in spec.measures})
@@ -183,7 +225,8 @@ def _aggregate(block: Block, spec: AggregateSpec, blocks) -> AggregateTable:
                 zero_filled.append(str(year))
 
     rows = sorted(totals.items(), key=lambda kv: _natural_key(kv[0]))
-    return AggregateTable(spec.title, spec.group_by, spec.measures, rows, sorted(zero_filled))
+    return AggregateTable(spec.title, group_by, spec.measures, rows,
+                          sorted(zero_filled), spec.note)
 
 
 def apply_step2(block: Block, spec: Step2Spec, nomenclature=None, blocks=None) -> Step2Result:
@@ -221,34 +264,37 @@ def apply_step2(block: Block, spec: Step2Spec, nomenclature=None, blocks=None) -
     notes = [
         f"{sort_note} (value-preserving)",
         f"columns ordered as declared in sheet 00: "
-        f"{' | '.join(block.dataset.headers)} (value-preserving)",
+        f"{' | '.join(block.fields)} (value-preserving)",
     ]
     for calc in spec.calculations:
         readable = FIELD.sub(lambda m: m.group(1), calc.expression).replace("/", " / ")
         notes.append(f"calculated {calc.name} = {readable} (value-adding)")
 
-    aggregate = _aggregate(block, spec.aggregate, blocks) if spec.aggregate else None
-    if aggregate is not None:
+    aggregates = [_aggregate(block, a, blocks) for a in spec.aggregates]
+    for table in aggregates:
         notes.append(
-            f"aggregated: {aggregate.title} — {spec.aggregate.group_by} × "
-            f"{', '.join(spec.aggregate.measures)} (value-preserving in total)"
+            f"aggregated: {table.title} — {table.group_by} × "
+            f"{', '.join(table.measures)} (value-preserving in total)"
         )
-        if aggregate.zero_filled:
+        if table.zero_filled:
             notes.append(
-                f"years with no record shown as 0: {', '.join(aggregate.zero_filled)}"
+                f"{table.title}: groups with no record shown as 0: "
+                f"{', '.join(table.zero_filled)}"
             )
 
     result = Step2Result(
         block=block, spec=spec, records=records, computed=computed, notes=notes,
-        figures=_derived_figures(block, spec, actual_year), aggregate=aggregate,
+        figures=_derived_figures(block, spec, actual_year), aggregates=aggregates,
     )
 
-    if aggregate is not None:
-        for measure, total in aggregate.totals().items():
+    # Every grouping of the same records must reach the same total.
+    for table in aggregates:
+        for measure, total in table.totals().items():
             if abs(total - result.totals().get(measure, 0.0)) > 1e-9:
                 raise ExtractionError(
-                    f"the aggregate total for {measure!r} is {total}, but the detail "
-                    f"totals {result.totals().get(measure)} — grouping lost records"
+                    f"{table.title!r}: the aggregate total for {measure!r} is {total}, "
+                    f"but the detail totals {result.totals().get(measure)} — "
+                    "grouping lost records"
                 )
 
     # Sorting and reordering cannot move a total; if they do, that is a bug — spec §10 C3.

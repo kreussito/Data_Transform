@@ -56,19 +56,23 @@ ATTRS_02 = ["Section", "Currency", "Scale", "Share basis", "Year basis",
 ATTRS_03 = ["Section", "Currency", "Scale", "Share basis", "Year basis",
             "Loss basis", "Threshold", "Date format", "As at"]
 ATTRS_04 = ["Section", "Currency", "Scale", "Share basis", "Year basis",
-            "Loss basis", "Date format", "As at"]
+            "Loss basis", "Date format", "Occurrence year from", "As at"]
 
 HEADERS_01 = ["Year", "Premium", "Incurred Losses"]
 HEADERS_02 = ["Year", "EPI"]
 HEADERS_03 = ["Year", "Name of Loss", "Loss amount", "Date of Loss"]
-HEADERS_04 = ["Year", "Event Name", "Loss amount", "Event Date"]
+# An event may be reported once per underwriting year it touches, so Event ID — not the
+# name and not the year — is what identifies the event — spec §9.2.1 S15.
+HEADERS_04 = ["Year", "Event ID", "Event Name", "Loss amount", "Event Date",
+              "Event End Date", "Number of Claims (optional)"]
 
 TYPES = [
     ("Year", "text"), ("Premium", "number"), ("Incurred Losses", "number"),
     ("EPI", "number"), ("Band", "text"), ("Number of Risks", "number"),
     ("Sum Insured", "number"), ("Claim Reference", "text"),
-    ("Name of Loss", "text"), ("Event Name", "text"), ("Loss amount", "number"),
-    ("Date of Loss", "date"), ("Event Date", "date"),
+    ("Name of Loss", "text"), ("Event ID", "text"), ("Event Name", "text"),
+    ("Loss amount", "number"), ("Number of Claims", "number"),
+    ("Date of Loss", "date"), ("Event Date", "date"), ("Event End Date", "date"),
 ]
 
 VOCABULARY = [
@@ -80,6 +84,7 @@ VOCABULARY = [
     ("Scale", "1 | 1,000 | 1,000,000"),
     ("Share basis", "100% | ceded only"),
     ("Date format", "ISO | DD.MM.YYYY | MM/DD/YYYY"),
+    ("Occurrence year from", "Event Date | Event End Date"),
     ("Currency", "ISO 4217"),
 ]
 
@@ -111,6 +116,8 @@ RULES = [
      "cat", "cat losses cannot exceed total incurred for the same year"),
     ("R-09", "01.Year basis", "=", "03.Year basis", 0, "error", "per risk",
      "history and large losses must be on the same year basis"),
+    ("R-10", "01.Year basis", "=", "04.Year basis", 0, "error", "cat",
+     "history and cat losses must be on the same year basis"),
 ]
 
 PROVISIONAL = [
@@ -315,11 +322,10 @@ def epi_sheet(wb, name, *, section, title, periods, epi, shares=None, extra_attr
     return ws
 
 
-def loss_sheet(wb, name, *, section, title, losses, kind="large", extra_attrs=None):
-    """``kind`` is ``large`` (03, per risk) or ``cat`` (04)."""
+def loss_sheet(wb, name, *, section, title, losses, extra_attrs=None):
+    """03. Large Losses — one claim per row, on a per-risk section."""
     ws = wb.create_sheet(name)
     put(ws, "B1", title, title_f)
-    is_large = kind == "large"
 
     entries = {
         2: f"Section = {section}",
@@ -329,10 +335,9 @@ def loss_sheet(wb, name, *, section, title, losses, kind="large", extra_attrs=No
         6: "H_Year basis = UW",
         7: "H_Loss basis = Incurred",
         8: "Date format = ISO",
+        9: "Threshold = 500",
         20: "As at = 31.12.2025",
     }
-    if is_large:
-        entries[9] = "Threshold = 500"
     entries.update(extra_attrs or {})
     entries[11] = "Header_1"
     entries[19] = "Info_1 = J"
@@ -348,15 +353,88 @@ def loss_sheet(wb, name, *, section, title, losses, kind="large", extra_attrs=No
         selector_col="J",
         source_labels={"B": "Claim no.", "C": "U/W Yr", "D": "Description",
                        "E": "Gross incurred", "F": "Occurred"},
-        declared={"C": "Year",
-                  "D": "Name of Loss" if is_large else "Event Name",
-                  "E": "Loss amount",
-                  "F": "Date of Loss" if is_large else "Event Date"},
+        declared={"C": "Year", "D": "Name of Loss", "E": "Loss amount",
+                  "F": "Date of Loss"},
         rows=rows,
         formats={"C": "@", "E": "#,##0", "F": "yyyy-mm-dd"},
         note_col="G",
     )
     widths(ws, {"A": 32, "B": 12, "C": 10, "D": 32, "E": 14, "F": 14, "G": 46, "J": 10})
+    return ws
+
+
+# 04. Cat Losses. One row is one event *in one underwriting year*: an event that runs
+# over a renewal date hits two underwriting years and is reported twice, so the annual
+# sum and the cost of the event are different questions — spec §9.2.1 S15.
+CAT_SOURCE_LABELS = {"B": "Cat code", "C": "U/W Yr", "D": "Event",
+                     "E": "Gross incurred", "F": "From", "G": "To", "H": "Claims"}
+CAT_DECLARED = {"B": "Event ID", "C": "Year", "D": "Event Name", "E": "Loss amount",
+                "F": "Event Date", "G": "Event End Date", "H": "Number of Claims"}
+CAT_FORMATS = {"C": "@", "E": "#,##0", "F": "yyyy-mm-dd", "G": "yyyy-mm-dd",
+               "H": "#,##0"}
+
+
+def _cat_layout(with_claims: bool) -> dict:
+    """The cat block's columns. ``Number of Claims`` sits in H and is optional — §8 F4."""
+    def keep(columns):
+        return columns if with_claims else {c: v for c, v in columns.items() if c != "H"}
+
+    return dict(
+        selector="J",
+        source=keep(CAT_SOURCE_LABELS),
+        declared=keep(CAT_DECLARED),
+        formats=keep(CAT_FORMATS),
+        note="I",
+    )
+
+
+def _event_rows(events):
+    """Expand each event into one row per underwriting year it touches."""
+    rows = []
+    for event_id, name, start, end, split in events:
+        for year, amount, claims in split:
+            row = {"B": event_id, "C": year, "D": name, "E": amount,
+                   "F": start, "G": end}
+            if claims is not None:
+                row["H"] = claims
+            rows.append(row)
+    return rows
+
+
+def cat_sheet(wb, name, *, section, title, events, with_claims, extra_attrs=None):
+    """04. Cat Losses — one sheet, one cat section."""
+    ws = wb.create_sheet(name)
+    put(ws, "B1", title, title_f)
+    layout = _cat_layout(with_claims)
+
+    entries = {
+        2: f"Section = {section}",
+        3: "Currency = USD",
+        4: "Scale = 1,000",
+        5: "Share basis = 100%",
+        6: "H_Year basis = UW",
+        7: "H_Loss basis = Incurred",
+        8: "Date format = ISO",
+        9: "Occurrence year from = Event Date",
+        20: "As at = 31.12.2025",
+    }
+    entries.update(extra_attrs or {})
+    entries[11] = "Header_1"
+    entries[19] = f"Info_1 = {layout['selector']}"
+    markers(ws, entries)
+
+    record_block(
+        ws,
+        header_row=11,
+        selector_col=layout["selector"],
+        source_labels=layout["source"],
+        declared=layout["declared"],
+        rows=_event_rows(events),
+        formats=layout["formats"],
+        note_col=layout["note"],
+    )
+    widths(ws, {"A": 32, "B": 12, "C": 10, "D": 30, "E": 14, "F": 14, "G": 14,
+                "H": 10, "I": 46, "J": 10})
     return ws
 
 
@@ -370,7 +448,7 @@ def multi_section_sheet(wb, name, *, title, kind, blocks_spec):
     ws = wb.create_sheet(name)
     put(ws, "B1", title, title_f)
 
-    layout = {
+    layouts = {
         "history": dict(
             selector="L",
             source={"B": "U/W Yr", "C": "Policies", "D": "Prem.", "G": "Incurred"},
@@ -385,16 +463,7 @@ def multi_section_sheet(wb, name, *, title, kind, blocks_spec):
             formats={"B": "@", "C": "#,##0"},
             note="F",
         ),
-        "cat": dict(
-            selector="J",
-            source={"B": "Event no.", "C": "U/W Yr", "D": "Event",
-                    "E": "Gross incurred", "F": "Occurred"},
-            declared={"C": "Year", "D": "Event Name", "E": "Loss amount",
-                      "F": "Event Date"},
-            formats={"C": "@", "E": "#,##0", "F": "yyyy-mm-dd"},
-            note="G",
-        ),
-    }[kind]
+    }
 
     entries = {
         2: "Currency = USD",
@@ -409,9 +478,14 @@ def multi_section_sheet(wb, name, *, title, kind, blocks_spec):
         entries[8] = "H_Loss basis = Incurred"
     if kind == "cat":
         entries[9] = "Date format = ISO"
+        entries[10] = "Occurrence year from = Event Date"
 
-    row = 12
+    row = 13
     for index, spec in enumerate(blocks_spec, start=1):
+        # A cat block declares its own columns: one section may report claim counts
+        # while another does not, and the optional field is simply absent.
+        layout = _cat_layout(spec.get("with_claims", False)) if kind == "cat" \
+            else layouts[kind]
         entries[row - 2] = f"Section_{index} = {spec['section']}"
         entries[row] = f"Header_{index}"
         put(ws, f"B{row - 3}", f"— {spec['section']} —", head_f)
@@ -429,8 +503,10 @@ def multi_section_sheet(wb, name, *, title, kind, blocks_spec):
         row = end + 5
 
     markers(ws, entries)
-    widths(ws, {"A": 32, "B": 18, "C": 14, "D": 32, "E": 14, "F": 14, "G": 46,
-                "H": 46, "J": 10, "K": 10, "L": 10})
+    widths(ws, {"A": 32, "B": 18, "C": 14, "D": 30, "E": 14, "F": 14, "G": 46,
+                "H": 46, "I": 46, "J": 10, "K": 10, "L": 10})
+    if kind == "cat":
+        widths(ws, {"B": 12, "C": 10, "G": 14, "H": 10})
     return ws
 
 
@@ -499,14 +575,23 @@ WIND_HISTORY = dict(
     incurred=[2300, 6800, 1450, 3200, 9100, 5300],
 )
 
+# id, name, start, end, [(underwriting year, loss, claims)]
+# One event, several underwriting years: risks written in 2022 and in 2023 were both on
+# cover when the Aegean earthquake struck, so the cedent reports it twice. Bettina runs
+# across a renewal date, which is the same problem in its sharpest form.
 EQ_EVENTS = [
-    ("2023", "Aegean earthquake M6.8", 7200, date(2023, 2, 6)),
-    ("2021", "Central Italy earthquake", 950, date(2021, 11, 19)),
+    ("EV-101", "Aegean earthquake M6.8", date(2023, 2, 6), date(2023, 2, 6),
+     [("2022", 400, 12), ("2023", 6800, 188)]),
+    ("EV-102", "Central Italy earthquake", date(2021, 11, 19), date(2021, 11, 20),
+     [("2021", 950, 31)]),
 ]
 WIND_EVENTS = [
-    ("2022", "Windstorm Eunice", 5400, date(2022, 2, 18)),
-    ("2025", "Windstorm Bettina", 7600, date(2025, 1, 31)),
-    ("2024", "Windstorm Kyrill II", 2400, date(2024, 12, 9)),
+    ("EV-201", "Windstorm Eunice", date(2022, 2, 18), date(2022, 2, 19),
+     [("2021", 1400, None), ("2022", 4000, None)]),
+    ("EV-202", "Windstorm Bettina", date(2024, 12, 30), date(2025, 1, 2),
+     [("2024", 1000, None), ("2025", 6600, None)]),
+    ("EV-203", "Windstorm Kyrill II", date(2024, 12, 9), date(2024, 12, 10),
+     [("2024", 1800, None)]),
 ]
 FIRE_LOSSES = [
     ("2021", "Warehouse fire, Lyon", 1850, date(2021, 3, 14)),
@@ -532,13 +617,6 @@ def _history_rows(spec):
 
 def _epi_rows(values):
     return [{"B": PERIODS[i], "C": values[i]} for i in range(len(PERIODS))]
-
-
-def _event_rows(events):
-    return [
-        {"B": f"EV-{3100 + i}", "C": year, "D": what, "E": amount, "F": when}
-        for i, (year, what, amount, when) in enumerate(events)
-    ]
 
 
 def build_fire_cat():
@@ -583,7 +661,8 @@ def build_fire_cat():
         wb, "04. Cat Losses", title="04. Cat Losses — EQ + Wind",
         kind="cat",
         blocks_spec=[
-            {"section": "Earthquake", "rows": _event_rows(EQ_EVENTS)},
+            {"section": "Earthquake", "rows": _event_rows(EQ_EVENTS),
+             "with_claims": True},
             {"section": "Windstorm", "rows": _event_rows(WIND_EVENTS)},
         ],
     )
@@ -627,10 +706,11 @@ def build_fire_eq_wind():
 
     loss_sheet(wb, "03. Large Losses Fire", section="Fire",
                title="03. Large Losses — Fire section", losses=FIRE_LOSSES)
-    loss_sheet(wb, "04. Cat Losses EQ", section="Earthquake",
-               title="04. Cat Losses — Earthquake", losses=EQ_EVENTS, kind="cat")
-    loss_sheet(wb, "04. Cat Losses Wind", section="Windstorm",
-               title="04. Cat Losses — Windstorm", losses=WIND_EVENTS, kind="cat")
+    cat_sheet(wb, "04. Cat Losses EQ", section="Earthquake",
+              title="04. Cat Losses — Earthquake", events=EQ_EVENTS, with_claims=True)
+    cat_sheet(wb, "04. Cat Losses Wind", section="Windstorm",
+              title="04. Cat Losses — Windstorm", events=WIND_EVENTS,
+              with_claims=False)
     return wb, "Intake_FireEQWind_v1.xlsx"
 
 

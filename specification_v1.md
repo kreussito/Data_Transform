@@ -195,9 +195,9 @@ Attributes now resolve in **three tiers**, each overriding the one above:
 | Field | Type |
 |---|---|
 | `Year` | text |
-| `Premium` · `Incurred Losses` · `EPI` · `Loss amount` · `Sum Insured` | number |
-| `Name of Loss` · `Band` · `Event Name` · `Claim Reference` | text |
-| `Date of Loss` · `Event Date` | **date** |
+| `Premium` · `Incurred Losses` · `EPI` · `Loss amount` · `Sum Insured` · `Number of Risks` · `Number of Claims` | number |
+| `Name of Loss` · `Band` · `Event ID` · `Event Name` · `Claim Reference` | text |
+| `Date of Loss` · `Event Date` · `Event End Date` | **date** |
 
 **A field name carries one type across the whole workbook** — which is precisely what a
 nomenclature is for. A declared field with no entry here is an error; nothing is
@@ -418,7 +418,7 @@ skipped record.
 | F1 | Fields resolve by **label match against `00`**, never by position |
 | F2 | Match is strict, after `.strip()` on both sides, including non-breaking spaces |
 | F3 | A duplicate label within the extraction row is an error |
-| F4 | A label declared in `00` but absent from the extraction row is an error |
+| F4 | A label declared in `00` but absent from the extraction row is an error, **unless `00` marks it `(optional)`** |
 | F5 | Every column/row containing data but not extracted is **logged**, and raises a question |
 | F6 | Merged cells are resolved before matching |
 | F7 | **Only resolved addresses are read** |
@@ -428,6 +428,27 @@ trimmed. Resolution produces an address map, and only those addresses are ever t
 
 F5 preserves the "a new column appeared and nobody noticed" catch that would otherwise
 be lost by ignoring the source header.
+
+**F4 and optional fields.** Sheet 00 declares an optional field by annotating the
+header, and the annotation is stripped from the name:
+
+```
+Number of Claims (optional)   →   field "Number of Claims", optional
+```
+
+The human still writes the bare name in the extraction row. Optionality belongs in 00
+because it is a statement about the *dataset* — what a cat listing may or may not carry
+— not about one workbook. Where the field is absent, it is simply not a column: it is
+excluded from the output, from the totals and from the column order, and step 1 says so
+in one line:
+
+```
+Declared optional in sheet 00, absent from this block: Number of Claims
+```
+
+That line is the difference between *the cedent did not report it* and *the tool lost
+it*, and only the first of those is acceptable in an audit trail. Everything not marked
+optional stays fatal when missing.
 
 ### 8.1 Worked resolution — `01. History`, row-wise
 
@@ -554,6 +575,7 @@ sums tying back to step 1.
 | **S12** | Figures relating *two records* are written as **block-level derived figures** beneath the data, not as columns | value-adding |
 | **S13** | Within one leading number, suffixes sort by the rank declared in `⟦PERIOD ORDER⟧`, not alphabetically | value-preserving |
 | **S14** | A dataset may declare an **aggregate table**: a second step-2 table grouping the detail and summing its measures | value-preserving |
+| **S15** | A dataset may declare **several** aggregate tables. Each must reach the same total as the detail, and an attribute may redirect a grouping | value-preserving |
 
 **S14.** `03. Large Losses` emits the claim detail and then, beneath it, the annual sum:
 
@@ -575,6 +597,69 @@ every year of the history has a counterpart here. Grouping is value-preserving, 
 aggregate total must equal the detail total or the run fails.
 
 The aggregate also makes R-01 expressible — see §10.1.
+
+**S15 — one set of losses, three questions.** `04. Cat Losses` declares:
+
+| Field | Type | |
+|---|---|---|
+| `Year` | text | on the treaty's year basis |
+| `Event ID` | text | **the grouping key** — a PERILS/PCS code or the cedent's own |
+| `Event Name` | text | the human label |
+| `Loss amount` | number | this event's share of this year |
+| `Event Date` | date | when the event began |
+| `Event End Date` | date | when it ended |
+| `Number of Claims` | number | **optional** — see §8 F4 |
+
+A cat event is not confined to one underwriting year: risks written in 2022 and in
+2023 were both on cover when the Aegean earthquake struck, so the cedent reports the
+event **once per underwriting year it touches**. `Event ID` — not the name, not the year
+— is what says those two rows are one event.
+
+That single fact makes three different tables all correct at once:
+
+```
+Windstorm — 5 records, 3 events, 14,800 in total
+
+Annual sum of cat losses      By occurrence year          By event
+  group by Year                 group by year(Event Date)   group by Event ID
+  2021    1,400                 2022    5,400               EV-201   5,400
+  2022    4,000                 2024    9,400               EV-202   7,600
+  2023        0                                             EV-203   1,800
+  2024    2,800
+  2025    6,600
+  ─────────────                 ─────────────               ─────────────
+         14,800                        14,800                      14,800
+```
+
+Each answers a question the others cannot:
+
+| Table | Question | Ties to |
+|---|---|---|
+| Annual sum | what did this treaty year cost? | `01. History` — this is R-02's table |
+| By occurrence year | when did the losses actually happen? | nothing; informational under a UW basis |
+| By event | what did the event cost? | the figure a cat layer is priced against |
+
+`EV-202` — Windstorm Bettina, 2024-12-30 to 2025-01-02 — is the reason the third table
+exists. Its 7,600 appears in **no** annual row: 1,000 landed in underwriting year 2024
+and 6,600 in 2025. A reviewer looking only at annual sums would price the layer against
+6,600 and be wrong by a fifth.
+
+Bettina is also why `Event End Date` is extracted. The end date is not used to
+reconstruct or reallocate anything — the client reports the split, and the tool does not
+second-guess it — but a reviewer must be able to see *why* one event sits in two years,
+and the pair of dates is what shows it.
+
+**Which date defines the occurrence year is the cedent's convention, not the tool's.**
+The default is the event's start; a pack that counts an event by when it ended declares
+so in column A, and the table follows without any code changing:
+
+```
+Occurrence year from = Event End Date       →   Bettina's 7,600 moves to 2025
+```
+
+The attribute must name a field the block actually extracts; naming anything else is
+fatal, not silently ignored. And S6 still binds every table: all three groupings of the
+same records must reach the same total, or the run fails.
 
 **S11.** A reviewer must be able to compare step 1 against the source cell by cell with
 nothing interposed. Step 1's control sums are not an exception: they *verify the
@@ -693,6 +778,7 @@ once and evaluated once per year present in the data, reported as `R-01/2023`.
 | R-01 | `SUM(03.Loss amount@{Y})` | `<=` | `01.Incurred Losses@{Y}` | 1 | **per risk** |
 | R-02 | `SUM(04.Loss amount@{Y})` | `<=` | `01.Incurred Losses@{Y}` | 1 | **cat** |
 | R-09 | `01.Year basis` | `=` | `03.Year basis` | 0 | **per risk** |
+| R-10 | `01.Year basis` | `=` | `04.Year basis` | 0 | **cat** |
 
 **Scope selects the sections a rule runs over**, and the rule is evaluated once per
 applicable section — reported as `R-01/Fire/2023`. On Fire + EQ + Wind, R-05 runs three
@@ -747,11 +833,17 @@ legitimately can, because a policy incepting in one year produces losses in the 
 So the check runs only where the declared basis makes it meaningful, and stays silent
 otherwise. A tool that flagged this under a UW basis would be wrong, not thorough.
 
+**Exactly one date defines the year.** A cat record carries two — `Event Date` and
+`Event End Date` — and only the one the cedent counts from is compared. An event running
+`2024-12-30 → 2025-01-02` is not misfiled because its *end* falls in the next year, and
+checking every date field would report it as an error. The field is the one named by
+`Occurrence year from`, defaulting to the first date field declared; naming a field the
+block does not extract as a date is fatal.
+
 #### Still to be declared
 
 | Rule | Left | Right | Relation |
 |---|---|---|---|
-| R-02 | Σ `04` Cat Losses, year *y* | `01` Incurred Losses, year *y* | ≤ |
 | R-03 | `10` Triangles latest diagonal, year *y* | `01` Incurred Losses, year *y* | = |
 | R-08 | `02` EPI `{N} est` | last year's pack, same label | = |
 
@@ -809,6 +901,8 @@ Resolved:
 | Sheet 08, Engineering | Two split axes, as Fire has |
 | Hypothesis register | **No separate sheet.** Documented in-sheet beneath the original data |
 | Row-level confidence | Off, **except for transposed blocks** |
+| Hours clause | **Not modelled.** The cedent reports the event split; the tool shows it, and does not redo it |
+| Number of claims on `04` | **Optional** — declared `(optional)` in sheet 00 |
 
 Remaining:
 
@@ -880,6 +974,16 @@ Four treaty shapes, generated by `tools/build_v1.py` and `tools/build_intake.py`
 
 The last two carry identical figures and are verified to produce identical
 crosschecks — the test that a section really is just a block.
+
+Their `04` blocks are built to exercise S15 rather than to look tidy:
+
+| | |
+|---|---|
+| `EV-101` Aegean earthquake | one event, **two underwriting years** (2022 and 2023) |
+| `EV-202` Windstorm Bettina | 2024-12-30 → 2025-01-02: **spans the renewal date** |
+| Earthquake | reports `Number of Claims` |
+| Windstorm | **does not** — the optional field is simply absent |
+| Earthquake | no losses in 2024 or 2025, so the annual table shows the zero rows |
 
 `Intake_v1.xlsx` implements this specification for:
 

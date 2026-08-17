@@ -73,6 +73,10 @@ class Dataset:
     key: str
     headers: tuple[str, ...]
     attributes: tuple[str, ...]
+    optional: tuple[str, ...] = ()      # declared in 00 as "<name> (optional)"
+
+    def is_optional(self, header: str) -> bool:
+        return header in self.optional
 
     @property
     def key_field(self) -> str:
@@ -163,12 +167,14 @@ class Block:
         return "Source row" if self.orientation is Orientation.ROW_WISE else "Source column"
 
     @property
+    def fields(self) -> tuple[str, ...]:
+        """Declared headers that this block actually resolved — spec §8 F4."""
+        return tuple(h for h in self.dataset.headers if h in self.address_map)
+
+    @property
     def numeric_fields(self) -> tuple[str, ...]:
         """Only these are summed — spec §8.4."""
-        return tuple(
-            h for h in self.dataset.headers
-            if self.field_types.get(h) is FieldType.NUMBER
-        )
+        return tuple(h for h in self.fields if self.field_types.get(h) is FieldType.NUMBER)
 
     def number_format(self, label: str) -> str:
         return self.field_types.get(label, FieldType.NUMBER).number_format

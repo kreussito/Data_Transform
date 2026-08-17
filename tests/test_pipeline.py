@@ -1030,7 +1030,7 @@ def _step2_large(books, nomenclature):
 
 def test_aggregate_groups_by_year_and_sums(books, nomenclature):
     _, result = _step2_large(books, nomenclature)
-    table = result.aggregate
+    table = result.aggregates[0]
     assert table.title == "Annual sum of large losses"
     assert [(k, v["Loss amount"]) for k, v in table.rows] == ANNUAL
 
@@ -1038,14 +1038,14 @@ def test_aggregate_groups_by_year_and_sums(books, nomenclature):
 def test_a_year_without_losses_shows_zero(books, nomenclature):
     """Absent reads as 'no data'; 0 reads as 'nothing happened'."""
     _, result = _step2_large(books, nomenclature)
-    assert result.aggregate.zero_filled == ["2022"]
-    assert dict(result.aggregate.rows)["2022"]["Loss amount"] == 0.0
+    assert result.aggregates[0].zero_filled == ["2022"]
+    assert dict(result.aggregates[0].rows)["2022"]["Loss amount"] == 0.0
 
 
 def test_aggregate_total_ties_to_the_detail(books, nomenclature):
     _, result = _step2_large(books, nomenclature)
-    assert result.aggregate.totals()["Loss amount"] == result.totals()["Loss amount"]
-    assert result.aggregate.totals()["Loss amount"] == LOSS_TOTAL
+    assert result.aggregates[0].totals()["Loss amount"] == result.totals()["Loss amount"]
+    assert result.aggregates[0].totals()["Loss amount"] == LOSS_TOTAL
 
 
 def test_grouping_that_loses_records_is_fatal(books, nomenclature, monkeypatch):
