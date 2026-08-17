@@ -70,8 +70,8 @@ HEADERS_04 = ["Year", "Event ID", "Event Name", "Loss amount", "Event Date",
 
 TYPES = [
     ("Year", "text"), ("Premium", "number"), ("Incurred Losses", "number"),
-    ("EPI", "number"), ("Band", "text"), ("Number of Risks", "number"),
-    ("Sum Insured", "number"), ("Claim Reference", "text"),
+    ("EPI", "number"), ("Band", "text"), ("Band from", "number"), ("Band to", "number"),
+    ("Number of Risks", "number"), ("Exposure", "number"), ("Claim Reference", "text"),
     ("Name of Loss", "text"), ("Event ID", "text"), ("Event Name", "text"),
     ("Loss amount", "number"), ("Number of Claims", "number"),
     ("Date of Loss", "date"), ("Event Date", "date"), ("Event End Date", "date"),
@@ -123,10 +123,13 @@ RULES = [
      "history and cat losses must be on the same year basis"),
 ]
 
+# Declared in the order a profile is read: what it is, where it sits, what it earns,
+# then what it is made of. Step 2 writes the columns in exactly this order — spec §9.2 S2.
+HEADERS_05 = ["Band", "Band from", "Band to", "Premium", "Number of Risks", "Exposure"]
+ATTRS_05 = ["Section", "Currency", "Scale", "Exposure basis", "As at"]
+
 PROVISIONAL = [
-    ("05. Risk Profiles", "05 Profile",
-     ["Band", "Number of Risks", "Sum Insured", "Premium"],
-     ["Section", "Currency", "Scale", "Exposure basis", "As at"]),
+    ("05. Risk Profiles", "05 Profile", HEADERS_05, ATTRS_05),
 ]
 
 
@@ -137,7 +140,7 @@ def build_sheet00(wb, *, treaty_type, sections, datasets, rules=RULES, full_key_
     put(ws, "B1", "00. Nomenclature & Interdependencies", title_f)
     put(ws, "B2", "The frame: what each sheet holds, what the names mean, what must tie. "
                   "Column A is intentionally empty — no markers in this sheet.", sub_f)
-    put(ws, "B3", "Greyed rows are provisional sketches, not yet specified.", sub_f)
+    put(ws, "B3", "Greyed rows are declared but not yet implemented end to end.", sub_f)
 
     for ref, text in [("B4", "Sheet name"), ("C4", "Key"),
                       ("D4", "Headers  →"), ("N4", "Attributes  →")]:

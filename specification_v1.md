@@ -47,7 +47,7 @@ is written as a visible block with control sums that tie back to the step before
 | `02. EPI Projections` | Estimated premium income | Authored |
 | `03. Large Losses` | Individual large claims | Authored |
 | `04. Cat Losses` | Catastrophe events | Authored |
-| `05. Risk Profiles` | Banded exposure | Authored |
+| `05. Risk Profiles` | Banded exposure — see §2.4 | Authored |
 | `06. EQ Aggs` | Earthquake aggregates | Authored |
 | `07. Wind Aggs` | Windstorm aggregates | Authored |
 | `08 …` | Fire splits **or** Engineering splits — occupancy × cover, see §2.1 | Authored |
@@ -133,6 +133,36 @@ begins. Without that, the first block of a stacked sheet would scan to the end a
 swallow the records below it. Blocks that *overlay* one another are bounded differently —
 see §6.5.
 
+### 2.4 Sheet 05 — the risk profile
+
+A banded exposure profile: the portfolio cut by risk size, which is what a per-risk
+excess-of-loss treaty is rated on. Declared in `00` in **the order a profile is read** —
+what the band is, where it sits, what it earns, then what it is made of. Step 2 writes
+the columns in exactly that order (§9.2 S2), so the declaration *is* the layout:
+
+| Field | Type | |
+|---|---|---|
+| `Band` | text | the cedent's own label — the record identity, verbatim |
+| `Band from` | number | lower bound, inclusive |
+| `Band to` | number | upper bound |
+| `Premium` | number | |
+| `Number of Risks` | number | |
+| `Exposure` | number | on the declared basis |
+
+Attributes: `Section · Currency · Scale · Exposure basis · As at`.
+
+**Why the bounds are numeric and separate from the label.** Two reasons, and both are
+fatal to a single text column. Natural alphanumeric sorting reads `"1,000 – 5,000"` as
+the digits `1` then `000`, so it would sort *before* `"500 – 1,000"`. And exposure rating
+a layer of 2,000 xs 1,000 has to allocate it across bands, which cannot be done against
+bounds that exist only as prose. The label is kept for identity — never parsed, exactly
+as `Year` is (§8.4) — and the numbers are what the machine works with.
+
+**Why the field is `Exposure`, not `Sum Insured`.** `Exposure basis` may declare `EML`,
+`PML` or `MPL`. A field name carries one meaning across the workbook (§3.3), so a column
+headed `Sum Insured` holding an EML figure would be a false label in the output. The
+field says what it is; the attribute says on what basis.
+
 ---
 
 ## 3 · Sheet 00 — the nomenclature
@@ -213,7 +243,7 @@ Attributes now resolve in **three tiers**, each overriding the one above:
 | Field | Type |
 |---|---|
 | `Year` | text |
-| `Premium` · `Incurred Losses` · `EPI` · `Loss amount` · `Sum Insured` · `Number of Risks` · `Number of Claims` | number |
+| `Premium` · `Incurred Losses` · `EPI` · `Loss amount` · `Exposure` · `Band from` · `Band to` · `Number of Risks` · `Number of Claims` | number |
 | `Name of Loss` · `Band` · `Event ID` · `Event Name` · `Claim Reference` | text |
 | `Date of Loss` · `Event Date` · `Event End Date` | **date** |
 
@@ -1096,8 +1126,10 @@ Resolved:
 
 Remaining:
 
-1. **Datasets `05`–`10`.** Header labels and attributes not yet specified;
-   `05. Risk Profiles` sits in `00. NC+Interdep` as a provisional sketch, marked as such.
+1. **Datasets `06`–`10`.** Header labels and attributes not yet specified.
+   `05. Risk Profiles` is now declared (§2.4) but not yet implemented: it has no step-2
+   spec, so it stays greyed in `00. NC+Interdep` and, under §9.1 O7, a pack carrying
+   that sheet would report an error rather than write a half-transformed block.
    `04. Cat Losses` was implemented alongside `03`, since a cat section needs it.
 2. **Sheet `08`'s measures.** Both split axes are settled (§2.1); what is counted at each
    intersection — risk count, sum insured, premium — is not.

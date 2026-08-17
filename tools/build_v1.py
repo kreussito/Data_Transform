@@ -66,8 +66,8 @@ ws.title = "00. NC+Interdep"
 put(ws, "B1", "00. Nomenclature & Interdependencies", title_f)
 put(ws, "B2", "The frame: what each sheet holds, what the names mean, what must tie. "
               "Column A is intentionally empty — no markers in this sheet.", sub_f)
-put(ws, "B3", "Greyed rows are provisional sketches, not yet specified. "
-              "04 is specified, though this Fire-only pack carries no cat sheet.", sub_f)
+put(ws, "B3", "Greyed rows are declared but not yet implemented end to end. "
+              "04 is implemented, though this Fire-only pack carries no cat sheet.", sub_f)
 
 # ── dataset register (rows 4-10, as agreed: dataset 01 on row 5)
 for ref, txt in [("B4", "Sheet name"), ("C4", "Key"),
@@ -94,9 +94,12 @@ datasets = [
     (8, "04. Cat Losses", "04 Cat",
      ["Year", "Event ID", "Event Name", "Loss amount", "Event Date", "Event End Date",
       "Number of Claims (optional)"], ATTRS_04, False),
+    # Declared in the order a profile is read; step 2 writes the columns in exactly
+    # this order — spec §9.2 S2. Section was missing here and is not optional: a
+    # profile belongs to a section like every other dataset.
     (9, "05. Risk Profiles", "05 Profile",
-     ["Band", "Number of Risks", "Sum Insured", "Premium"],
-     ["Currency", "Scale", "Exposure basis", "As at"], True),
+     ["Band", "Band from", "Band to", "Premium", "Number of Risks", "Exposure"],
+     ["Section", "Currency", "Scale", "Exposure basis", "As at"], True),
     (10, "01. History_Transposed", "01 History_T",
      ["Year", "Premium", "Incurred Losses"], ATTRS_01, False),
     (11, "02. EPI Projections_Transposed", "02 EPI_T",
@@ -148,7 +151,8 @@ r = block(ws, r + 3, "⟦TYPES⟧", ["Field", "Type"])
 types = [
     ("Year", "text"), ("Premium", "number"), ("Incurred Losses", "number"),
     ("EPI", "number"), ("Band", "text"), ("Number of Risks", "number"),
-    ("Sum Insured", "number"), ("Claim Reference", "text"), ("Event Name", "text"),
+    ("Band from", "number"), ("Band to", "number"), ("Exposure", "number"),
+    ("Claim Reference", "text"), ("Event Name", "text"),
     ("Name of Loss", "text"), ("Event ID", "text"), ("Loss amount", "number"),
     ("Number of Claims", "number"),
     ("Date of Loss", "date"), ("Event Date", "date"), ("Event End Date", "date"),
