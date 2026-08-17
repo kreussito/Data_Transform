@@ -360,12 +360,13 @@ class BlockWriter:
             self.row += 1
 
 
-def write_blocks(ws, block: Block, result: Step2Result | None,
+def write_blocks(ws, block: Block, result: Step2Result,
                  clear: bool = True) -> list[tuple[str, str, float]]:
-    """Write step 1 and, where one is defined, step 2 — spec §9.1.
+    """Write step 1 and step 2 — spec §9.1.
 
-    A dataset with no step-2 spec still gets its extraction written. Step 1 is
-    auditable on its own: it is what the sheet says, verified by its own control sums.
+    Both steps or neither. A dataset with no step-2 spec is not written at all and the
+    run reports an error: a half-transformed sheet in an output workbook invites the
+    reader to treat it as finished, and nothing in the sheet itself would say otherwise.
 
     ``clear`` removes output from an earlier run. A sheet carrying several
     section-blocks is written one block at a time, so only the first call may clear —
@@ -378,18 +379,136 @@ def write_blocks(ws, block: Block, result: Step2Result | None,
     start = last_non_empty_row(ws) + 1 + GAP
     writer = BlockWriter(ws, start)
     writer.write_step1(block)
-    if result is None:
-        writer.row += 1
-        writer._line(
-            f"STEP 2 — not defined for dataset {block.dataset.key!r}. The extraction "
-            "above stands on its own; no sort, ordering or derived measure has been "
-            "specified for this dataset yet."
-        )
-    else:
-        writer.write_step2(result)
+    writer.write_step2(result)
 
+    _widen(ws)
+    return writer.formula_values
+
+
+def _widen(ws) -> None:
     for col in range(FIRST_COL, FIRST_COL + 8):
         letter = col_letter(col)
         if ws.column_dimensions[letter].width in (None, 0):
             ws.column_dimensions[letter].width = 16
+
+
+def write_loss_share(ws, table) -> list[tuple[str, str, float]]:
+    """The section group's loss check, at the end of sheet 01 — spec §10.3.
+
+    Written last and separated by the usual three blank rows, because it is about the
+    treaty rather than about one block: it sums every loss dataset of the group and
+    holds the total against the incurred losses the same group reports.
+    """
+    from .extract import last_non_empty_row
+    from .lossshare import EXCEEDS, OK, ROLE_LABEL, TOLERANCE, WARNING
+
+    writer = BlockWriter(ws, last_non_empty_row(ws) + 1 + GAP)
+    writer._put(FIRST_COL, anchor_tag(f"{table.kind} sections", "LOSSSHARE"), anchor_f)
+    writer.row += 1
+    writer._put(FIRST_COL, table.title.upper(), title_f, fill=ctrl_fill)
+    writer.row += 1
+
+    writer._line(f"Sections summed: {', '.join(table.sections)}"
+                 + (f" · scale {table.scale}" if table.scale else ""))
+    if len(table.sheets) > 1:
+        # The group spans sheets, so the same table is written at the end of each of
+        # them. Saying so stops a reader treating the second copy as a second finding.
+        others = [s for s in table.sheets if s != ws.title]
+        writer._line("The same table is written at the end of "
+                     + ", ".join(others) + " — one check, one result, shown wherever "
+                     "a section of this group is reported.")
+    if table.skipped:
+        writer._line(f"NOT EVALUATED — {table.skipped}. Summing figures on a differing "
+                     "basis would produce a number that means nothing.")
+        _widen(ws)
+        return writer.formula_values
+
+    writer._line(
+        f"Declared losses = {' + '.join(ROLE_LABEL[r] for r in table.roles)}; "
+        f"total incurred = Incurred Losses in 01 for the same year."
+    )
+    writer._line(
+        f"Two questions per year: declared ≤ incurred (tolerance {TOLERANCE:,.0f}), and "
+        f"declared ÷ incurred ≤ {table.threshold:.0%} — above that the year is driven by "
+        "single events rather than attrition, which changes how it is rated."
+    )
+
+    # The per-role columns show how the declared total is made up. With one role they
+    # would simply repeat it, so they are written only where there is something to split.
+    split = table.roles if len(table.roles) > 1 else ()
+
+    headers = ["Year"] + [ROLE_LABEL[r] for r in split] + \
+              ["Declared losses", "Total incurred (01)", "Share", "Status"]
+    for i, text in enumerate(headers):
+        writer._put(FIRST_COL + i, text, head_f, fill=ctrl_fill)
+    writer.row += 1
+
+    share_col = FIRST_COL + len(split) + 3
+    status_col = share_col + 1
+    first = writer.row
+    for row in table.rows:
+        writer._put(FIRST_COL, str(row.year), body_f, "@")
+        for i, role in enumerate(split, start=1):
+            writer._put(FIRST_COL + i, row.by_role.get(role, 0.0), body_f, "#,##0")
+        declared_col = FIRST_COL + len(split) + 1
+        writer._put(declared_col, row.declared, ctrl_f, "#,##0")
+        writer._put(declared_col + 1, row.incurred, body_f, "#,##0")
+        if row.share is not None:
+            writer._formula(
+                share_col,
+                f"={col_letter(declared_col)}{writer.row}/"
+                f"{col_letter(declared_col + 1)}{writer.row}",
+                row.share, "0.0%", ctrl_f,
+            )
+        else:
+            writer._put(share_col, "n/a", note_f)
+        status = row.status(table.threshold)
+        writer._put(status_col, status, ctrl_f,
+                    fill=None if status == OK else ctrl_fill)
+        writer.row += 1
+    last = writer.row - 1
+
+    writer._put(FIRST_COL, f"Control  (n = {len(table.rows)})", ctrl_f, fill=ctrl_fill)
+    for i in range(1, len(split) + 3):
+        letter = col_letter(FIRST_COL + i)
+        writer._formula(FIRST_COL + i, f"=SUM({letter}{first}:{letter}{last})",
+                        _column_total(table, split, i), "#,##0", ctrl_f, ctrl_fill)
+    writer.row += 1
+
+    partial = [str(r.year) for r in table.rows if r.partial]
+    if partial:
+        writer._line(
+            f"Only some sections of this group report a history row for "
+            f"{', '.join(partial)}, so the incurred total for those years covers fewer "
+            "sections than the declared losses do. The comparison still runs; it is "
+            "conservative, and the gap is named rather than closed by assumption."
+        )
+
+    grouped = {}
+    for row in table.rows:
+        status = row.status(table.threshold)
+        if status != OK:
+            grouped.setdefault(status, []).append(str(row.year))
+    writer._line(
+        "Every year within both limits."
+        if not grouped else
+        "; ".join(f"{status}: {', '.join(years)}" for status, years in grouped.items())
+        + ". "
+        + ("A declared total above the incurred total cannot be right — one of the two "
+           "sheets is wrong, or they are on different bases."
+           if table.worst == EXCEEDS else
+           "Not an error: a fact about the portfolio, raised so it is priced knowingly."
+           if table.worst == WARNING else
+           "A year in 01 has no incurred figure to compare against.")
+    )
+    _widen(ws)
     return writer.formula_values
+
+
+def _column_total(table, split, offset: int):
+    """The tool's own value for a written SUM formula, so the cache stays honest."""
+    if offset <= len(split):
+        role = split[offset - 1]
+        return sum(r.by_role.get(role, 0.0) for r in table.rows)
+    declared, incurred = table.totals()
+    return declared if offset == len(split) + 1 else incurred

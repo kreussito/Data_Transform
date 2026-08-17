@@ -174,14 +174,17 @@ def build_sheet00(wb, *, treaty_type, sections, datasets, rules=RULES, full_key_
 
     # ── ⟦GLOBAL⟧
     r = block_header(ws, r + 3, "⟦GLOBAL⟧", ["Attribute", "Value"])
-    for name, value in [("Actual year", 2025), ("Treaty type", treaty_type),
-                        ("Cedent", "Example Insurance SA")]:
+    for name, value, fmt in [("Actual year", 2025, "0"),
+                             ("Treaty type", treaty_type, None),
+                             ("Cedent", "Example Insurance SA", None),
+                             ("Loss share warning", 0.20, "0%")]:
         put(ws, f"B{r}", name, body_f)
-        put(ws, f"C{r}", value, body_f, yellow, fmt="0" if name == "Actual year" else None)
+        put(ws, f"C{r}", value, body_f, yellow, fmt=fmt)
         r += 1
     put(ws, f"B{r + 1}", "Actual year is N: the expiring year; the renewal is N+1. "
                          "Sheet attributes override these; block attributes override "
-                         "the sheet.", sub_f)
+                         "the sheet. Loss share warning is the point above which a "
+                         "year's declared losses are flagged (§10.3).", sub_f)
 
     # ── ⟦TYPES⟧
     r = block_header(ws, r + 3, "⟦TYPES⟧", ["Field", "Type"])
@@ -519,15 +522,27 @@ def _epi(re_est, nine_months, est, renewal):
     return [est, nine_months, re_est, renewal]
 
 
+# An Engineering or Miscellaneous treaty is *per risk* and still carries cat events:
+# a flood or a hailstorm hits a construction site like any other risk. So one per-risk
+# section reports both loss datasets, and §10.3 holds their sum against 01.
+ENGINEERING_EVENTS = [
+    ("EV-301", "Flood, Saxony", date(2021, 7, 14), date(2021, 7, 18),
+     [("2021", 1150, 24)]),
+    ("EV-302", "Hailstorm, Po Valley", date(2024, 6, 22), date(2024, 6, 22),
+     [("2023", 900, 18), ("2024", 2600, 41)]),
+]
+
+
 def build_engineering():
-    """An Engineering treaty — one per-risk section, the same shape as Fire."""
+    """An Engineering treaty — one per-risk section carrying large *and* cat losses."""
     wb = Workbook()
     wb.remove(wb.active)
-    sections = [("Engineering", "per risk", ["01", "02", "03"])]
+    sections = [("Engineering", "per risk", ["01", "02", "03", "04"])]
     datasets = [
         ("01. History", "01 History", HEADERS_01, ATTRS_01),
         ("02. EPI Projections", "02 EPI", HEADERS_02, ATTRS_02),
         ("03. Large Losses", "03 Large", HEADERS_03, ATTRS_03),
+        ("04. Cat Losses", "04 Cat", HEADERS_04, ATTRS_04),
     ]
     build_sheet00(wb, treaty_type="Engineering", sections=sections, datasets=datasets)
 
@@ -555,6 +570,11 @@ def build_engineering():
             ("2024", "Generator fire, Valencia plant", 1975, date(2024, 7, 30)),
             ("2025", "Cable laying barge grounding, Kiel", 1180, date(2025, 5, 12)),
         ],
+    )
+    cat_sheet(
+        wb, "04. Cat Losses", section="Engineering",
+        title="04. Cat Losses — Engineering", events=ENGINEERING_EVENTS,
+        with_claims=True,
     )
     return wb, "Intake_Engineering_v1.xlsx"
 

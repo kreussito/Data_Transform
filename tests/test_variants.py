@@ -414,11 +414,56 @@ def test_year_basis_must_agree_between_history_and_cat_losses():
     assert all(r.status == "passed" for r in results)
 
 
-def test_the_engineering_pack_needs_no_cat_machinery(tmp_path):
+def test_a_dataset_with_no_step_2_spec_is_not_written_at_all(tmp_path, monkeypatch):
+    """Both steps or neither — spec §9.1 O7.
+
+    A step-1 block sitting alone in an output workbook looks finished, and nothing in
+    the sheet would say it is not. So the sheet is left as the source had it and the
+    run reports an error.
+    """
+    from datatransform import runner as rmod
+    from datatransform.specs import step2_for as real
+
+    source = tmp_path / ENGINEERING.name
+    shutil.copy2(ENGINEERING, source)
+    monkeypatch.setattr(rmod, "step2_for",
+                        lambda key: None if key.startswith("03") else real(key))
+
+    out = tmp_path / "out.xlsx"
+    report = run(source, out, tmp_path / "logs")
+
+    assert not report.ok
+    unwritten = next(o for o in report.outcomes if o.sheet == "03. Large Losses")
+    assert unwritten.status == "error"
+    assert "no step-2 spec" in unwritten.detail
+
+    ws = load_workbook(out, data_only=True)["03. Large Losses"]
+    text = [c.value for row in ws.iter_rows() for c in row if isinstance(c.value, str)]
+    assert not any("STEP 1" in t for t in text)
+    # Every other sheet is written as usual.
+    assert any(o.status == "processed" for o in report.outcomes)
+
+
+def test_a_fire_only_pack_needs_no_cat_machinery(tmp_path):
+    source = tmp_path / FIRE.name
+    shutil.copy2(FIRE, source)
+    report = run(source, tmp_path / "out.xlsx", tmp_path / "logs")
+
+    processed = {o.sheet for o in report.outcomes if o.status == "processed"}
+    assert processed == {"01. History", "01. History_Transposed", "02. EPI Projections",
+                         "02. EPI Projections_Transposed", "03. Large Losses"}
+    assert all(r.status != "failed" for r in report.rule_results)
+
+
+def test_a_per_risk_section_may_carry_cat_losses_too(tmp_path):
+    """Engineering / Miscellaneous: a flood hits a construction site — spec §10.3."""
     source = tmp_path / ENGINEERING.name
     shutil.copy2(ENGINEERING, source)
     report = run(source, tmp_path / "out.xlsx", tmp_path / "logs")
 
     processed = {o.sheet for o in report.outcomes if o.status == "processed"}
-    assert processed == {"01. History", "02. EPI Projections", "03. Large Losses"}
+    assert processed == {"01. History", "02. EPI Projections", "03. Large Losses",
+                         "04. Cat Losses"}
     assert all(r.status != "failed" for r in report.rule_results)
+    # One per-risk section, both loss datasets, summed by the §10.3 check.
+    assert [(t.kind, t.roles) for t in report.loss_share] == [("per risk", ("03", "04"))]

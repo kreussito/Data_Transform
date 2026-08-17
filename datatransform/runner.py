@@ -13,13 +13,14 @@ from openpyxl import load_workbook
 
 from .crosschecks import hypotheses_from, results_for, run_rules
 from .extract import _number_hypotheses, extract_sheet, last_non_empty_row
+from .lossshare import EXCEEDS, OK, loss_share_tables
 from .markers import read_markers
 from .model import Block, ExtractionError
 from .nomenclature import Nomenclature, read_nomenclature, sheet_sort_key
 from .recalc import inject
 from .specs import SPEC_VERSION, step2_for
 from .transform import Step2Result, apply_step2
-from .writer import write_blocks
+from .writer import write_blocks, write_loss_share
 
 TOOL_VERSION = "0.1.0"
 
@@ -41,6 +42,7 @@ class RunReport:
     started: datetime
     outcomes: list[SheetOutcome] = field(default_factory=list)
     rule_results: list = field(default_factory=list)
+    loss_share: list = field(default_factory=list)
     injected: int = 0
 
     @property
@@ -50,6 +52,19 @@ class RunReport:
     @property
     def rules_ok(self) -> bool:
         return all(r.status != "failed" for r in self.rule_results)
+
+    @property
+    def loss_share_ok(self) -> bool:
+        """No section group declares more losses than it incurred — spec §10.3.
+
+        A warning does not make this False: an unusual year is a fact about the
+        portfolio, not a fault in the pack.
+        """
+        return all(t.worst != EXCEEDS for t in self.loss_share)
+
+    @property
+    def loss_share_warnings(self) -> list:
+        return [t for t in self.loss_share if t.worst != OK]
 
 
 def sha256(path: Path) -> str:
@@ -170,6 +185,15 @@ def run(source: str | Path, output: str | Path | None = None,
         _write_sheet(outcome, out_wb, nomenclature, blocks,
                      debug, process, formula_values)
 
+    # Pass 3 — the section-group loss check, written at the end of sheet 01. It sums
+    # across blocks and sheets, so it can only be built once everything is extracted.
+    report.loss_share = loss_share_tables(nomenclature, blocks)
+    _log_loss_share(report.loss_share, debug, process)
+    for table in report.loss_share:
+        for sheet in table.sheets:
+            if sheet in out_wb.sheetnames:
+                formula_values.extend(write_loss_share(out_wb[sheet], table))
+
     out_wb.save(output)
     result = inject(output, formula_values)
     report.injected = result["injected"]
@@ -223,15 +247,16 @@ def _write_sheet(outcome, out_wb, nomenclature, blocks,
         clear = index == 0
         spec = step2_for(block.dataset.key)
         if spec is None:
-            # Extraction is auditable on its own; only the transformation is missing.
-            outcome.status = "step 1 only"
+            # Both steps or neither — spec §9.1 O7. A step-1 block on its own would sit
+            # in the output workbook looking finished, and nothing in the sheet would
+            # say it is not. The sheet is left exactly as the source had it.
+            outcome.status = "error"
             outcome.detail = f"no step-2 spec for dataset {block.dataset.key!r}"
+            debug.error("%s: %s", outcome.sheet, outcome.detail)
             process.info("")
-            process.info("%s — extracted, but no step-2 spec for %s; step 1 only.",
-                         outcome.sheet, block.dataset.key)
-            formula_values.extend(
-                write_blocks(out_wb[outcome.sheet], block, None, clear))
-            _log_block(block, None, debug, process)
+            process.info("%s — extracted, but %s. Nothing written: a sheet is "
+                         "transformed completely or not at all.",
+                         outcome.sheet, outcome.detail)
             continue
 
         result = apply_step2(block, spec, nomenclature, blocks)
@@ -253,6 +278,32 @@ def _log_rules(results, nomenclature, debug, process) -> None:
                      r.label, r.status.upper(), r.rule.left, r.rule.relation,
                      r.rule.right, r.detail)
         debug.info("rule %s: %s (%s)", r.label, r.status, r.detail)
+
+
+def _log_loss_share(tables, debug, process) -> None:
+    """The section-group loss check — spec §10.3."""
+    if not tables:
+        return
+    process.info("")
+    process.info("Declared losses against total incurred (§10.3)")
+    for table in tables:
+        process.info("  %s — sections: %s; written at the end of %s",
+                     table.kind, ", ".join(table.sections), ", ".join(table.sheets))
+        if table.skipped:
+            process.info("    NOT EVALUATED — %s", table.skipped)
+            debug.warning("loss share %s: not evaluated (%s)", table.kind, table.skipped)
+            continue
+        process.info("    warning above %.0f%% of total incurred", table.threshold * 100)
+        for row in table.rows:
+            status = row.status(table.threshold)
+            share = "n/a" if row.share is None else f"{row.share:.1%}"
+            process.info("    %-6s declared %12s  incurred %12s  share %7s  %s",
+                         row.year, f"{row.declared:,.0f}",
+                         "—" if row.incurred is None else f"{row.incurred:,.0f}",
+                         share, status)
+            if status != OK:
+                debug.warning("loss share %s %s: %s (declared %s of %s)",
+                              table.kind, row.year, status, row.declared, row.incurred)
 
 
 def _log_block(block: Block, result: Step2Result | None, debug, process):

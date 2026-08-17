@@ -130,16 +130,18 @@ put(ws, f"B{r + 1}", "One per-risk section: a Fire treaty. Large losses (03) app
 
 # ── ⟦GLOBAL⟧
 r = block(ws, r + 3, "⟦GLOBAL⟧", ["Attribute", "Value"])
-for name, value in [("Actual year", 2025),
-                    ("Treaty type", "Fire"),
-                    ("Cedent", "Example Insurance SA"),
-                    ("Treaty", "Property per Risk XL")]:
+for name, value, fmt in [("Actual year", 2025, "0"),
+                         ("Treaty type", "Fire", None),
+                         ("Cedent", "Example Insurance SA", None),
+                         ("Treaty", "Property per Risk XL", None),
+                         ("Loss share warning", 0.20, "0%")]:
     put(ws, f"B{r}", name, body_f)
-    put(ws, f"C{r}", value, body_f, yellow, fmt="0" if name == "Actual year" else None)
+    put(ws, f"C{r}", value, body_f, yellow, fmt=fmt)
     r += 1
 put(ws, f"B{r + 1}", "Actual year is N: the expiring year. The renewal being underwritten "
                      "is N+1. Sheet attributes override these; block attributes override "
-                     "the sheet.", sub_f)
+                     "the sheet. Loss share warning is the point above which a year's "
+                     "declared losses are flagged (§10.3).", sub_f)
 
 # ── ⟦TYPES⟧
 r = block(ws, r + 3, "⟦TYPES⟧", ["Field", "Type"])

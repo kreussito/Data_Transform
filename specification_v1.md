@@ -178,9 +178,15 @@ anchor rather than by position.
 | `Actual year` | `2025` |
 | `Cedent` | Example Insurance SA |
 | `Treaty` | Property per Risk XL |
+| `Loss share warning` | `20%` |
 
 `Actual year` is **N**, the expiring year; the renewal being underwritten is **N+1**.
 Every `{N}` reference in `⟦RULES⟧` and in the step-2 figures resolves from it.
+
+`Loss share warning` is the point above which a year's declared losses are flagged as
+event-driven rather than attritional — see §10.3. It sits here because it is a matter of
+underwriting judgment, not a mechanic: a different underwriter may want 15% or 30%, and
+should not need the tool changed to get it.
 
 Attributes now resolve in **three tiers**, each overriding the one above:
 
@@ -537,9 +543,22 @@ back to a number, never normalised, never merged. See §9.2 S10.
 | O4 | Output is always written **row-wise**, whatever the source orientation |
 | O5 | Every block carries a machine anchor so re-runs **replace** rather than stack |
 | O6 | `20. Summary` collects **step-2 blocks only**, block by block, regenerated wholesale |
+| O7 | **Both steps or neither.** A dataset with no step-2 spec is not written at all, and the run reports an **error** |
+| O8 | The section-group loss check (§10.3) is written last, 3 blank rows below everything else on sheet `01` |
 
 O2 uses the last non-empty row of the whole sheet, not the last record, so that
 footnotes and totals below the data are never overwritten.
+
+**O7.** The alternative — writing step 1 alone with a note that step 2 is undefined —
+was rejected. A step-1 block sitting in an output workbook *looks finished*: it has its
+records, its control sums and its tie-back, and a reader who did not write the tool has
+no reason to treat it differently from any other block. The note is one line among
+twenty. Leaving the sheet exactly as the source had it cannot mislead anyone, and the
+`error` status makes the gap impossible to miss in the run report.
+
+The cost is real and accepted: hypotheses the tool raised correctly about that sheet are
+computed and then discarded. A missing spec is a gap in the *tool*, and until it is
+filled the tool has nothing to say about that sheet.
 
 O5 is necessary because three blank rows are a *visual* separator, not a machine one —
 real data blocks contain blank rows. Each generated block is tagged:
@@ -849,6 +868,86 @@ block does not extract as a date is fatal.
 
 R-08 needs a stored prior run.
 
+### 10.3 Declared losses against total incurred
+
+`⟦RULES⟧` compares one figure with one other figure. This check cannot be written that
+way, because **both sides are sums over several blocks**: a treaty may carry large
+losses and cat losses at once, and a Nat Cat treaty carries one cat sheet per peril. So
+it is made over a **section group** — every section of one kind — and asks two questions
+of each year:
+
+| | Question | Outcome |
+|---|---|---|
+| **Is it possible?** | Σ declared losses ≤ total incurred, same year | `EXCEEDS` — an **error** |
+| **Is it ordinary?** | Σ declared losses ÷ total incurred ≤ threshold | `WARNING` — not an error |
+
+Grouping by section *kind* covers every case with one rule:
+
+| Treaty | Group | Declared losses | Held against |
+|---|---|---|---|
+| Engineering / Miscellaneous | one per-risk section | `03` **+** `04`, whichever exist | that section's `01` |
+| Fire only | one per-risk section | `03` alone | that section's `01` |
+| Fire + Nat Cat | *per risk* | `03` (Fire) | Fire's `01` |
+| | *cat* | `04` (EQ) **+** `04` (Wind) | EQ's `01` **+** Wind's `01` |
+
+**Why the sum matters.** R-01 and R-02 already check each loss dataset on its own. Only
+the sum catches large *and* cat losses that are each plausible and jointly are not — the
+Engineering case, where a year's large losses and its hailstorm are separately unremarkable
+and together exceed what the portfolio incurred.
+
+**Why the share matters.** A year whose declared losses make up more than the declared
+share of total incurred was driven by a handful of events rather than by attrition, which
+changes how it is rated: those events are normally stripped out and rated separately. That
+is a *fact about the portfolio*, not a mistake in the pack, so it is a warning and never
+sets the run to failed.
+
+The threshold is declared in `⟦GLOBAL⟧` as `Loss share warning`, so it is the underwriter's
+number rather than the tool's. `20%`, `20` and `0.2` are all read as 20% — a share above 1
+can only have been meant as a percentage. Where it is absent, 20% applies and the written
+table says so.
+
+```
+DECLARED LOSSES AGAINST TOTAL INCURRED — PER RISK SECTIONS
+Sections summed: Engineering · scale 1,000
+Declared losses = Large losses (03) + Cat losses (04); total incurred = Incurred Losses in 01.
+Two questions per year: declared ≤ incurred (tolerance 1), and declared ÷ incurred ≤ 20%.
+
+  Year   Large (03)   Cat (04)   Declared   Incurred (01)   Share   Status
+  2021        1,420      1,150      2,570           5,100   50.4%   WARNING
+  2022            0          0          0           6,350    0.0%   within limits
+  2023        3,170        900      4,070           4,820   84.4%   WARNING
+  2024        1,975      2,600      4,575           7,240   63.2%   WARNING
+  2025        1,180          0      1,180           5,680   20.8%   WARNING
+  Control (n = 5)
+WARNING: 2021, 2023, 2024, 2025. Not an error: a fact about the portfolio, raised so
+it is priced knowingly.
+```
+
+**What it refuses to do.** The same precondition as §10.1, narrowed to what a loss
+comparison needs — `Loss basis`, `Share basis` and `Currency` must agree across every
+block summed. A 100% figure added to a ceded-only one is a number that means nothing, so
+where they differ the group is **not evaluated** and says why. Scale is normalised to the
+group's `01` blocks.
+
+A section contributes **once**. `Intake_v1.xlsx` carries `01. History` and its transposed
+twin, which are the same portfolio in two shapes; summing both would double it.
+
+Where only some sections of a group report a history row for a year, the incurred total
+for that year covers fewer sections than the declared losses do. The comparison still
+runs — it is conservative, since a smaller basis can only make a finding more likely,
+never hide one — and the years affected are **named** in the table rather than the gap
+being closed by assumption.
+
+**Where it is written.** At the end of sheet `01`, three blank rows below everything else
+(§9.1 O8) — it is about the treaty rather than about one block. Where a group spans
+several `01` sheets, as EQ and Wind do when each has its own, the same table is written at
+the end of each and each copy names the others, so a second copy does not read as a second
+finding. The per-role columns appear only where there is more than one role to split; with
+one they would merely repeat the total.
+
+The status word is `within limits`, never `OK`: step 1 and step 2 already write an
+`OK`/`MISMATCH` control check, and one word must not mean two things on one sheet.
+
 ---
 
 ## 11 · Logging
@@ -903,6 +1002,8 @@ Resolved:
 | Row-level confidence | Off, **except for transposed blocks** |
 | Hours clause | **Not modelled.** The cedent reports the event split; the tool shows it, and does not redo it |
 | Number of claims on `04` | **Optional** — declared `(optional)` in sheet 00 |
+| Dataset with no step-2 spec | **Nothing written**, run reports an error — §9.1 O7 |
+| Loss-share threshold | **20%**, declared in `⟦GLOBAL⟧` so an underwriter can change it |
 
 Remaining:
 
@@ -925,6 +1026,7 @@ datatransform/
     extract.py        field resolution and record selection       (§7, §8)
     coerce.py         type coercion                                (§8.4)
     crosschecks.py    interdependencies between sheets             (§10.1)
+    lossshare.py      declared losses against total incurred       (§10.3)
     transform.py      step 1 and step 2                           (§9.2, §10)
     specs.py          step-2 mechanics, per dataset
     writer.py         block layout, control sums, anchors         (§9, §10)
@@ -968,7 +1070,7 @@ Four treaty shapes, generated by `tools/build_v1.py` and `tools/build_intake.py`
 | Workbook | Sections | Demonstrates |
 |---|---|---|
 | `Intake_v1.xlsx` | Fire | both orientations; R-02 not applicable |
-| `Intake_Engineering_v1.xlsx` | Engineering | the same shape, different data |
+| `Intake_Engineering_v1.xlsx` | Engineering | **one per-risk section carrying both `03` and `04`** — the §10.3 sum |
 | `Intake_FireCat_v1.xlsx` | Fire, Earthquake, Windstorm | the two cat sections **share one sheet** |
 | `Intake_FireEQWind_v1.xlsx` | Fire, Earthquake, Windstorm | **a sheet per section** |
 

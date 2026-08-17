@@ -275,7 +275,8 @@ def test_run_writes_blocks_and_leaves_source_untouched(workspace, tmp_path):
         c.value for row in wb[ROW_WISE].iter_rows() for c in row
         if isinstance(c.value, str) and c.value.startswith(ANCHOR_PREFIX)
     ]
-    assert anchors == ["⟦DT:01 History:STEP1:v1⟧", "⟦DT:01 History:STEP2:v1⟧"]
+    assert anchors == ["⟦DT:01 History:STEP1:v1⟧", "⟦DT:01 History:STEP2:v1⟧",
+                       "⟦DT:per risk sections:LOSSSHARE:v1⟧"]
 
 
 def test_generated_blocks_start_below_the_last_original_row(workspace, tmp_path):
@@ -303,7 +304,7 @@ def test_rerun_replaces_rather_than_stacks(workspace, tmp_path):
     ws = load_workbook(again, data_only=True)[ROW_WISE]
     anchors = [c.value for row in ws.iter_rows() for c in row
                if isinstance(c.value, str) and c.value.startswith(ANCHOR_PREFIX)]
-    assert len(anchors) == 2, "a re-run must replace the previous blocks, not append to them"
+    assert len(anchors) == 3, "a re-run must replace the previous blocks, not append to them"
     assert ws.max_row == first_extent
 
 
