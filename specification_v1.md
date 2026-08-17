@@ -50,7 +50,7 @@ is written as a visible block with control sums that tie back to the step before
 | `05. Risk Profiles` | Banded exposure | Authored |
 | `06. EQ Aggs` | Earthquake aggregates | Authored |
 | `07. Wind Aggs` | Windstorm aggregates | Authored |
-| `08 …` | Fire splits **or** Engineering — see §2.1 | Authored |
+| `08 …` | Fire splits **or** Engineering splits — occupancy × cover, see §2.1 | Authored |
 | `09. Rate Development` | Rate change history | Authored, optional |
 | `10. Triangles` | Development triangles | Authored |
 | `Exchange rates` | FX rates for conversion | Authored |
@@ -68,14 +68,25 @@ external links, stale formula caches, heterogeneous layouts and imported defined
 
 ### 2.1 Sheet 08 — two exclusive variants
 
-Sheet `08` carries exactly one of:
+Sheet `08` carries exactly one of two variants, each split on **two axes**:
 
-- **Fire** — split by Res / Com / Ind **and** by B / C / BI
-- **Engineering** (Projects & Renewables) — two split axes likewise, one of them
-  Res / Com / Ind; the second axis is not yet named
+| Variant | Axis 1 — occupancy | Axis 2 — cover |
+|---|---|---|
+| **Fire** | Residential · Commercial · Industrial | B · C · BI |
+| **Engineering** | Residential · Commercial · Industrial | Projects · Renewables |
+
+**The occupancy axis is common to both.** That is the useful part: Res / Com / Industrial
+is how the *portfolio* is divided, and it divides an Engineering book exactly as it
+divides a Fire one. What distinguishes the variants is only the second axis — what is
+being covered. So one split mechanism serves both, and the variant selects the second
+axis rather than the whole layout.
 
 The variant is declared, not sniffed. A declaration that disagrees with the sheet
 content is an interdependency failure.
+
+Still to be specified for `08`: the **measures** at each intersection — a risk count,
+a sum insured, a premium, or some combination — and therefore the header labels sheet
+00 will declare. The axes are settled; what is counted along them is not.
 
 ### 2.2 Sheet matching
 
@@ -997,7 +1008,7 @@ Resolved:
 | Pivots in the output | **No.** Plain `openpyxl` throughout |
 | Pivot source ranges | Not a concern, since pivots are not carried forward |
 | Mandatory attributes | **Mandatory.** The attribute list in `00` is the checklist; an undeclared attribute ranks `Open` |
-| Sheet 08, Engineering | Two split axes, as Fire has |
+| Sheet 08, split axes | **Occupancy (Res / Com / Industrial) is common to both variants**; the second axis is B / C / BI for Fire, Projects / Renewables for Engineering — §2.1 |
 | Hypothesis register | **No separate sheet.** Documented in-sheet beneath the original data |
 | Row-level confidence | Off, **except for transposed blocks** |
 | Hours clause | **Not modelled.** The cedent reports the event split; the tool shows it, and does not redo it |
@@ -1007,12 +1018,12 @@ Resolved:
 
 Remaining:
 
-1. **The second Engineering split axis** on sheet `08` is not yet named.
-2. **Datasets `02`–`10`.** Header labels and attributes not yet specified. Rows 6–9 of
-   `00. NC+Interdep` hold provisional sketches, marked as such.
-3. **Remaining datasets.** `05`–`10` are not yet specified. `04. Cat Losses` is
-   implemented alongside `03`, since a cat section needs it.
-4. **Sheet `20. Summary`.** Specified in §9.1 O6 but not yet implemented; it needs at
+1. **Datasets `05`–`10`.** Header labels and attributes not yet specified;
+   `05. Risk Profiles` sits in `00. NC+Interdep` as a provisional sketch, marked as such.
+   `04. Cat Losses` was implemented alongside `03`, since a cat section needs it.
+2. **Sheet `08`'s measures.** Both split axes are settled (§2.1); what is counted at each
+   intersection — risk count, sum insured, premium — is not.
+3. **Sheet `20. Summary`.** Specified in §9.1 O6 but not yet implemented; it needs at
    least two datasets to be meaningful.
 
 ---
