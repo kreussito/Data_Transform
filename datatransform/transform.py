@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .model import Block, ExtractionError, Record
+from .model import Block, Confidence, ExtractionError, Hypothesis, Record
 from .specs import AggregateSpec, Step2Spec
 
 FIELD = re.compile(r"\{([^}]+)\}")
@@ -46,20 +46,24 @@ class Step2Result:
     notes: list[str] = field(default_factory=list)
     figures: list[Figure] = field(default_factory=list)
     aggregates: list[AggregateTable] = field(default_factory=list)
+    derived_fields: tuple[str, ...] = ()     # declared fields step 2 read off a label
 
     @property
     def declared_columns(self) -> tuple[str, ...]:
-        """Exactly the order sheet 00 declares, less any absent optional field."""
-        return self.block.fields
+        """Exactly the order sheet 00 declares, less any field neither present nor derived."""
+        available = set(self.block.fields) | set(self.derived_fields)
+        return tuple(h for h in self.block.dataset.headers if h in available)
 
     @property
     def columns(self) -> tuple[str, ...]:
         """Declared columns, then derived ones — spec §9.2 S3."""
-        return self.declared_columns + tuple(c.name for c in self.spec.calculations)
+        return (self.declared_columns
+                + tuple(c.name for c in self.spec.calculations)
+                + tuple(c.name for c in self.spec.cumulative))
 
     def totals(self) -> dict[str, float]:
         out = {}
-        for m in self.block.numeric_fields:
+        for m in self.block.measure_fields:
             out[m] = sum(
                 r.values[m] for r in self.records if isinstance(r.values.get(m), (int, float))
             )
@@ -109,13 +113,64 @@ def _period_key(value, order: dict[str, int]):
     return ((0, number, ""), (0, rank, ""), *_natural_key(suffix))
 
 
-def _sort_key(record: Record, fields, order=None):
+def _sort_key(record: Record, fields, order=None, numeric=False):
+    if numeric:
+        # A bound is a number, so it orders as one. Absences sort first: a band open at
+        # the bottom precedes every closed band.
+        return [(record.values.get(f) is not None, record.values.get(f) or 0.0)
+                for f in fields]
     key = []
     for f in fields:
         value = record.values.get(f)
         period = _period_key(value, order) if order else None
         key.append(period if period is not None else _natural_key(value))
     return key
+
+
+def _derive_bounds(block: Block, spec: Step2Spec):
+    """Read the band bounds off the label where the source did not supply them.
+
+    Returns ``(records, derived field names, note)``. The records are **copies**: step 1
+    holds what the sheet says and must not gain a column step 2 worked out (S11).
+    """
+    from .bands import continuity, parse_band
+
+    bounds = spec.bounds
+    if bounds is None or bounds.label not in block.fields:
+        return list(block.records), (), None
+
+    missing = [f for f in (bounds.lower, bounds.upper) if f not in block.fields]
+    if not missing:
+        pairs = [(r.values.get(bounds.label), r.values.get(bounds.lower),
+                  r.values.get(bounds.upper)) for r in block.records]
+        return list(block.records), (), continuity(pairs)
+
+    records, pairs = [], []
+    for record in block.records:
+        lower, upper = parse_band(record.values.get(bounds.label), record.source_ref)
+        values = dict(record.values)
+        values.setdefault(bounds.lower, lower)
+        values.setdefault(bounds.upper, upper)
+        records.append(Record(record.source_ref, values, record.confidence))
+        pairs.append((record.values.get(bounds.label), values[bounds.lower],
+                      values[bounds.upper]))
+    return records, tuple(missing), continuity(pairs)
+
+
+def _cumulative(records, spec: Step2Spec) -> dict[str, list[float | None]]:
+    """Running share of each column's total — spec §9.2.1 S17."""
+    out = {}
+    for cum in spec.cumulative:
+        total = sum(r.values[cum.field] for r in records
+                    if isinstance(r.values.get(cum.field), (int, float)))
+        running, column = 0.0, []
+        for record in records:
+            value = record.values.get(cum.field)
+            if isinstance(value, (int, float)):
+                running += float(value)
+            column.append(running / total if total else None)
+        out[cum.name] = column
+    return out
 
 
 def _derived_figures(block: Block, spec: Step2Spec, actual_year: int | None):
@@ -237,7 +292,11 @@ def apply_step2(block: Block, spec: Step2Spec, nomenclature=None, blocks=None) -
     actual_year = getattr(nomenclature, "actual_year", None)
     order = getattr(nomenclature, "period_order", None) or {}
 
-    records = sorted(block.records, key=lambda r: _sort_key(r, spec.sort_by, order),
+    # Bounds first: the sort depends on them, and they may have to be read off the label.
+    source, derived_fields, gaps = _derive_bounds(block, spec)
+
+    records = sorted(source,
+                     key=lambda r: _sort_key(r, spec.sort_by, order, spec.numeric_sort),
                      reverse=not spec.ascending)
 
     computed: dict[str, list[float | None]] = {}
@@ -256,19 +315,45 @@ def apply_step2(block: Block, spec: Step2Spec, nomenclature=None, blocks=None) -
                 column.append(None)
         computed[calc.name] = column
 
+    computed.update(_cumulative(records, spec))
+
     sort_note = (f"sorted by {', '.join(spec.sort_by)} "
-                 f"{'ascending' if spec.ascending else 'descending'}, natural alphanumeric")
-    if order:
+                 f"{'ascending' if spec.ascending else 'descending'}, "
+                 + ("numeric" if spec.numeric_sort else "natural alphanumeric"))
+    if order and not spec.numeric_sort:
         ranked = " → ".join(s for s, _ in sorted(order.items(), key=lambda kv: kv[1]))
         sort_note += f", period order {ranked}"
-    notes = [
-        f"{sort_note} (value-preserving)",
+
+    notes = []
+    if derived_fields:
+        shown = "; ".join(
+            f"{r.values.get(spec.bounds.label)!r} → "
+            f"{'' if r.values.get(spec.bounds.lower) is None else format(r.values[spec.bounds.lower], ',.0f')}"
+            f" … "
+            f"{'open' if r.values.get(spec.bounds.upper) is None else format(r.values[spec.bounds.upper], ',.0f')}"
+            for r in records[:3]
+        )
+        notes.append(
+            f"{' and '.join(derived_fields)} read off {spec.bounds.label} — the source "
+            f"declares no such column (value-adding): {shown}"
+            + (" …" if len(records) > 3 else "")
+        )
+
+    available = set(block.fields) | set(derived_fields)
+    shown_columns = [h for h in block.dataset.headers if h in available]
+    notes.append(f"{sort_note} (value-preserving)")
+    notes.append(
         f"columns ordered as declared in sheet 00: "
-        f"{' | '.join(block.fields)} (value-preserving)",
-    ]
+        f"{' | '.join(shown_columns)} (value-preserving)"
+    )
     for calc in spec.calculations:
         readable = FIELD.sub(lambda m: m.group(1), calc.expression).replace("/", " / ")
         notes.append(f"calculated {calc.name} = {readable} (value-adding)")
+    for cum in spec.cumulative:
+        notes.append(f"calculated {cum.name} = running {cum.field} ÷ total {cum.field} "
+                     "(value-adding)")
+    for finding in gaps or []:
+        notes.append(f"BAND CONTINUITY: {finding}")
 
     aggregates = [_aggregate(block, a, blocks) for a in spec.aggregates]
     for table in aggregates:
@@ -285,7 +370,18 @@ def apply_step2(block: Block, spec: Step2Spec, nomenclature=None, blocks=None) -
     result = Step2Result(
         block=block, spec=spec, records=records, computed=computed, notes=notes,
         figures=_derived_figures(block, spec, actual_year), aggregates=aggregates,
+        derived_fields=derived_fields,
     )
+    if gaps:
+        block.hypotheses.append(
+            Hypothesis(
+                id="", dataset_key=block.dataset.key, attribute="Band continuity",
+                value=f"{len(gaps)} finding(s)", confidence=Confidence.OPEN,
+                source="tool", note="; ".join(gaps),
+            )
+        )
+        from .extract import _number_hypotheses
+        _number_hypotheses(block)
 
     # Every grouping of the same records must reach the same total.
     for table in aggregates:

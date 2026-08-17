@@ -63,8 +63,8 @@ def test_sections_are_declared_in_sheet_00(path, expected):
 def test_a_section_declares_which_datasets_it_expects():
     nomenclature, _ = _blocks(FIRE_CAT)
     by_name = {s.name: s for s in nomenclature.sections}
-    assert by_name["Fire"].roles == ("01", "02", "03")       # large losses
-    assert by_name["Earthquake"].roles == ("01", "02", "04")  # event losses instead
+    assert by_name["Fire"].roles == ("01", "02", "03", "05")       # large losses
+    assert by_name["Earthquake"].roles == ("01", "02", "04", "05")  # event losses instead
     assert by_name["Fire"].expects("03") and not by_name["Earthquake"].expects("03")
 
 
@@ -577,7 +577,8 @@ def test_a_fire_only_pack_needs_no_cat_machinery(tmp_path):
 
     processed = {o.sheet for o in report.outcomes if o.status == "processed"}
     assert processed == {"01. History", "01. History_Transposed", "02. EPI Projections",
-                         "02. EPI Projections_Transposed", "03. Large Losses"}
+                         "02. EPI Projections_Transposed", "03. Large Losses",
+                         "05. Risk Profiles"}
     assert all(r.status != "failed" for r in report.rule_results)
 
 
@@ -589,7 +590,7 @@ def test_a_per_risk_section_may_carry_cat_losses_too(tmp_path):
 
     processed = {o.sheet for o in report.outcomes if o.status == "processed"}
     assert processed == {"01. History", "02. EPI Projections", "03. Large Losses",
-                         "04. Cat Losses"}
+                         "04. Cat Losses", "05. Risk Profiles"}
     assert all(r.status != "failed" for r in report.rule_results)
     # One per-risk section, both loss datasets, summed by the §10.3 check.
     assert [(t.kind, t.roles) for t in report.loss_share] == [("per risk", ("03", "04"))]

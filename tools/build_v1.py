@@ -103,7 +103,7 @@ datasets = [
      ["Band", "Band from (optional)", "Band to (optional)",
       "Premium", "Number of Risks", "Exposure"],
      ["Section", "Currency", "Scale", "Share basis", "Exposure basis",
-      "Includes fac", "Layered business", "As at"], True),
+      "Includes fac", "Layered business", "As at"], False),
     (10, "01. History_Transposed", "01 History_T",
      ["Year", "Premium", "Incurred Losses"], ATTRS_01, False),
     (11, "02. EPI Projections_Transposed", "02 EPI_T",
@@ -129,7 +129,7 @@ for row, sheet, key, headers, attrs, provisional in datasets:
 r = block(ws, 13, "⟦SECTIONS⟧", ["Section", "Kind", "Datasets"])
 put(ws, f"B{r}", SECTION, body_f, yellow)
 put(ws, f"C{r}", "per risk", body_f, blue)
-put(ws, f"D{r}", "01, 02, 03", body_f)
+put(ws, f"D{r}", "01, 02, 03, 05", body_f)
 r += 1
 put(ws, f"B{r + 1}", "One per-risk section: a Fire treaty. Large losses (03) apply; "
                      "cat losses (04) do not, so rules scoped 'cat' are not applicable.",
@@ -600,6 +600,67 @@ ws.column_dimensions["E"].width = 14
 ws.column_dimensions["F"].width = 14
 ws.column_dimensions["G"].width = 46
 ws.column_dimensions["J"].width = 10
+
+# ══════════════════════════════════════════════════ 05. Risk Profiles
+# The fully-declared shape: the cedent supplies both numeric bounds, so step 2 has
+# nothing to read off the label. The Engineering packs show the other shape.
+ws = wb.create_sheet("05. Risk Profiles")
+put(ws, "B1", "05. Risk Profiles — Fire, as at 30.09.2025", title_f)
+
+for row, text in [(2, f"Section = {SECTION}"), (3, "Currency = USD"), (4, "Scale = 1,000"),
+                  (5, "Share basis = 100%"), (6, "Exposure basis = Sum Insured"),
+                  (7, "Includes fac = yes"), (8, "Layered business = excluded"),
+                  (10, "Header_1"), (18, "Info_1 = J"), (19, "As at = 30.09.2025")]:
+    cell = ws.cell(row=row, column=1, value=text)
+    cell.fill, cell.border = yellow, box
+    cell.font = marker_f if text.split("_")[0] in ("Header", "Info") else attr_f
+
+for ref, text in [("B9", "Band"), ("C9", "From"), ("D9", "To"), ("E9", "Premium"),
+                  ("F9", "Risks"), ("G9", "Sum insured")]:
+    put(ws, ref, text, inert_f)
+put(ws, "H9", "← source header, never read", sub_f)
+
+for ref, text in [("B10", "Band"), ("C10", "Band from"), ("D10", "Band to"),
+                  ("E10", "Premium"), ("F10", "Number of Risks"), ("G10", "Exposure")]:
+    put(ws, ref, text, head_f, blue).border = box
+put(ws, "H10", "← extraction row: the bounds are declared, so nothing is read "
+               "off the label", sub_f)
+
+profile = [
+    ("0 - 1 000", 0, 1_000, 2_150, 620, 310_000),
+    ("1 001 - 5 000", 1_001, 5_000, 4_900, 480, 1_290_000),
+    ("5 001 - 10 000", 5_001, 10_000, 5_300, 260, 1_880_000),
+    ("10 001 - 25 000", 10_001, 25_000, 4_700, 118, 2_010_000),
+    ("> 25 000", 25_000, None, 3_100, 27, 1_140_000),
+]
+for i, (label, low, high, premium, risks, exposure) in enumerate(profile):
+    row = 11 + i
+    put(ws, f"B{row}", label, body_f)
+    put(ws, f"C{row}", low, body_f, fmt="#,##0")
+    if high is not None:
+        put(ws, f"D{row}", high, body_f, fmt="#,##0")
+    put(ws, f"E{row}", premium, body_f, fmt="#,##0")
+    put(ws, f"F{row}", risks, body_f, fmt="#,##0")
+    put(ws, f"G{row}", exposure, body_f, fmt="#,##0")
+    cell = ws[f"J{row}"]
+    cell.value = "=ROW()"
+    cell.font, cell.fill, cell.border = body_f, green, box
+put(ws, "D15", "open", inert_f)
+
+total_row = 11 + len(profile)
+put(ws, f"B{total_row}", "Total", head_f)
+for col in ("E", "F", "G"):
+    c = ws[f"{col}{total_row}"]
+    c.value = f"=SUM({col}11:{col}{total_row - 1})"
+    c.font, c.number_format = head_f, "#,##0"
+put(ws, f"H{total_row}", "← selector empty: excluded, reused as control", sub_f)
+put(ws, "B18", "The top band is open at the top: its upper bound is absent, not zero. "
+               "Bands are grouped with spaces, which is unambiguous; a comma-grouped "
+               "label would be refused by the decimal rule.", sub_f)
+
+for col, width in {"A": 30, "B": 20, "C": 12, "D": 12, "E": 12, "F": 10, "G": 14,
+                   "H": 52, "J": 10}.items():
+    ws.column_dimensions[col].width = width
 
 wb.save(OUT)
 

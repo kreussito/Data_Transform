@@ -65,6 +65,33 @@ class AggregateSpec:
 
 
 @dataclass(frozen=True)
+class Bounds:
+    """Numeric bounds that may have to be read off a label — spec §2.4, §9.2.1 S16.
+
+    Where the source declares the two columns they are extracted and this does nothing.
+    Where it does not, step 2 reads them off ``label`` and says so — interpretation
+    belongs to step 2, never to step 1.
+    """
+
+    label: str
+    lower: str
+    upper: str
+
+
+@dataclass(frozen=True)
+class Cumulative:
+    """A running share of the column's total — spec §9.2.1 S17.
+
+    What a profile exists to answer is "where does the book sit?", and that is a
+    cumulative question: no single band answers it.
+    """
+
+    name: str
+    field: str
+    number_format: str = "0.0%"
+
+
+@dataclass(frozen=True)
 class Step2Spec:
     """Step-2 mechanics.
 
@@ -78,6 +105,9 @@ class Step2Spec:
     calculations: tuple[Calculation, ...] = field(default_factory=tuple)
     figures: tuple[DerivedFigure, ...] = field(default_factory=tuple)
     aggregates: tuple[AggregateSpec, ...] = field(default_factory=tuple)
+    cumulative: tuple[Cumulative, ...] = field(default_factory=tuple)
+    bounds: Bounds | None = None
+    numeric_sort: bool = False       # sort on the number, not the label
 
 
 STEP2: dict[str, Step2Spec] = {
@@ -143,6 +173,33 @@ STEP2: dict[str, Step2Spec] = {
             ),
         ),
     ),
+    "05 Profile": Step2Spec(
+        # By the lower bound as a number, never by the label: natural alphanumeric reads
+        # "1,000 – 5,000" as the digits 1 then 000, placing it before "500 – 1,000".
+        sort_by=("Band from",),
+        ascending=True,
+        numeric_sort=True,
+        bounds=Bounds(label="Band", lower="Band from", upper="Band to"),
+        calculations=(
+            Calculation(
+                name="Average exposure per risk",
+                expression="{Exposure}/{Number of Risks}",
+                number_format="#,##0",
+                guard_zero="Number of Risks",
+            ),
+            Calculation(
+                name="Rate on exposure ‰",
+                expression="{Premium}/{Exposure}*1000",
+                number_format="0.000",
+                guard_zero="Exposure",
+            ),
+        ),
+        cumulative=(
+            Cumulative("Cumulative risks %", "Number of Risks"),
+            Cumulative("Cumulative exposure %", "Exposure"),
+            Cumulative("Cumulative premium %", "Premium"),
+        ),
+    ),
     "03 Large": Step2Spec(
         sort_by=("Year", "Date of Loss"),
         ascending=True,
@@ -180,4 +237,5 @@ STEP2_BY_ROLE: dict[str, Step2Spec] = {
     "02": STEP2["02 EPI"],
     "03": STEP2["03 Large"],
     "04": STEP2["04 Cat"],
+    "05": STEP2["05 Profile"],
 }

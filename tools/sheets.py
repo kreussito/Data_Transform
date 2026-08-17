@@ -61,7 +61,7 @@ def markers(ws, entries: dict):
 
 
 def record_block(ws, *, header_row, selector_col, source_labels, declared, rows,
-                 formats, note_col="H"):
+                 formats, note_col="H", total_cols=None):
     """One row-wise block: an inert source header, an extraction row, then records.
 
     ``declared`` maps a column letter to the label declared in sheet 00; every other
@@ -87,7 +87,10 @@ def record_block(ws, *, header_row, selector_col, source_labels, declared, rows,
     last = first + len(rows) - 1
 
     total_row = last + 1
-    numeric = [c for c, f in formats.items() if f == "#,##0"]
+    # ``total_cols`` names the columns the cedent would actually total. A band bound is
+    # a number but not a quantity, so a profile's own total row leaves the bounds alone.
+    numeric = (total_cols if total_cols is not None
+               else [c for c, f in formats.items() if f == "#,##0"])
     key_col = next(iter(declared))
     put(ws, f"{key_col}{total_row}", "Total", head_f)
     for col in numeric:

@@ -175,8 +175,24 @@ class Block:
 
     @property
     def numeric_fields(self) -> tuple[str, ...]:
-        """Only these are summed — spec §8.4."""
+        """Every field read as a number — spec §8.4."""
         return tuple(h for h in self.fields if self.field_types.get(h) is FieldType.NUMBER)
+
+    @property
+    def measure_fields(self) -> tuple[str, ...]:
+        """The numeric fields that are **business measures**, and so are summed.
+
+        A band bound is a number, but summing the lower edges of a risk profile produces
+        a figure that means nothing and would sit in the control row inviting a reader to
+        interpret it. Bounds order and compare records; they are not quantities of
+        anything — spec §2.4.
+        """
+        from .specs import step2_for
+
+        spec = step2_for(self.dataset.key)
+        bounds = getattr(spec, "bounds", None) if spec else None
+        excluded = {bounds.lower, bounds.upper} if bounds else set()
+        return tuple(f for f in self.numeric_fields if f not in excluded)
 
     def number_format(self, label: str) -> str:
         return self.field_types.get(label, FieldType.NUMBER).number_format
@@ -185,7 +201,7 @@ class Block:
         return {
             m: sum(r.values[m] for r in self.records
                    if isinstance(r.values.get(m), (int, float)))
-            for m in self.numeric_fields
+            for m in self.measure_fields
         }
 
 

@@ -6,7 +6,7 @@ Excel, driven by metadata declared in the workbook itself.
 | | |
 |---|---|
 | **Version** | 1 |
-| **Status** | `00`–`04` implemented, per-risk and cat sections; `05`–`10` outstanding |
+| **Status** | `00`–`05` implemented, per-risk and cat sections; `06`–`10` outstanding |
 | **Cadence** | Once per treaty, per year |
 | **Reference workbooks** | `Intake_v1.xlsx` · `Intake_Engineering_v1.xlsx` · `Intake_EngineeringCombined_v1.xlsx` · `Intake_FireCat_v1.xlsx` · `Intake_FireEQWind_v1.xlsx` |
 
@@ -100,9 +100,9 @@ A treaty is one or more **sections**, declared in `⟦SECTIONS⟧` of sheet 00:
 
 | Section | Kind | Datasets |
 |---|---|---|
-| `Fire` | per risk | 01, 02, 03 |
-| `Earthquake` | cat | 01, 02, 04 |
-| `Windstorm` | cat | 01, 02, 04 |
+| `Fire` | per risk | 01, 02, 03, 05 |
+| `Earthquake` | cat | 01, 02, 04, 05 |
+| `Windstorm` | cat | 01, 02, 04, 05 |
 
 A Fire-only or Engineering treaty lists one per-risk section. A Nat Cat treaty lists
 cat sections and **no `03` anywhere** — the absence of large losses is *declared*, not
@@ -205,6 +205,12 @@ date, so a pack showing two or three years carries one **block per profile**, ea
 its own `As at_i`. Whether the blocks sit one below the other or side by side is already
 handled: stacked blocks share a selector column, side-by-side blocks use different ones,
 and §6.5 tells them apart without anyone declaring which arrangement it is.
+
+**One profile per line of business.** Every section expects `05`, whatever its kind, so a
+Fire + EQ + Windstorm treaty carries three profiles and an Engineering treaty one. The
+same block mechanism serves that too: `Intake_FireCat_v1.xlsx` puts all three on one
+sheet as `Section_1..3`, `Intake_FireEQWind_v1.xlsx` gives each its own sheet, and the two
+are verified to produce identical profiles.
 
 ---
 
@@ -757,6 +763,8 @@ sums tying back to step 1.
 | **S13** | Within one leading number, suffixes sort by the rank declared in `⟦PERIOD ORDER⟧`, not alphabetically | value-preserving |
 | **S14** | A dataset may declare an **aggregate table**: a second step-2 table grouping the detail and summing its measures | value-preserving |
 | **S15** | A dataset may declare **several** aggregate tables. Each must reach the same total as the detail, and an attribute may redirect a grouping | value-preserving |
+| **S16** | A declared field the source does not supply may be **derived in step 2** from one it does — never in step 1 | value-adding |
+| **S17** | A dataset may declare **cumulative** columns: a running share of a measure's total | value-adding |
 
 **S14.** `03. Large Losses` emits the claim detail and then, beneath it, the annual sum:
 
@@ -841,6 +849,41 @@ Occurrence year from = Event End Date       →   Bettina's 7,600 moves to 2025
 The attribute must name a field the block actually extracts; naming anything else is
 fatal, not silently ignored. And S6 still binds every table: all three groupings of the
 same records must reach the same total, or the run fails.
+
+**S16 and S17 — the risk profile.** `05` is where both appear. A band's numeric bounds
+are declared optional (§2.4) because the source supplies them either as two columns or
+only inside the label. Where they are absent, step 2 reads them off the label and names
+what it read:
+
+```
+· Band from and Band to read off Band — the source declares no such column
+  (value-adding): '0 – 1 000' → 0 … 1,000; '1 001 – 5 000' → 1,001 … 5,000 …
+```
+
+The division is exactly S11's: step 1 shows four columns because the sheet has four;
+step 2 shows six because it worked two of them out, and says so. The derived columns
+still appear in **the order sheet 00 declares** (S2), not appended at the end — they are
+declared fields that happened to arrive inside another one.
+
+Sorting then happens on the bound as a *number*, which is the whole reason the bounds
+exist: natural alphanumeric would place `10 001 – 25 000` before `5 001 – 10 000`.
+
+**S17.** A profile is read cumulatively — "where does the book sit?" is a question no
+single band answers. So `05` emits three running shares, each a live formula over the
+range above it:
+
+```
+=IFERROR(SUM(G$58:G60)/SUM(G$58:G$62),"")
+```
+
+A reviewer can see both the running sum and the total it is divided by, which a bare
+percentage would not show.
+
+**Bounds are never summed.** A band bound is a number but not a quantity: totalling the
+lower edges of a profile produces a figure that means nothing and would sit in the
+control row inviting interpretation. So the control sums cover the **measures** —
+`Premium`, `Number of Risks`, `Exposure` — and the bounds are left out of them, in both
+steps and in the reference sheets' own total rows.
 
 **S11.** A reviewer must be able to compare step 1 against the source cell by cell with
 nothing interposed. Step 1's control sums are not an exception: they *verify the
@@ -1170,10 +1213,6 @@ Resolved:
 Remaining:
 
 1. **Datasets `06`–`10`.** Header labels and attributes not yet specified.
-   `05. Risk Profiles` is now declared (§2.4) but not yet implemented: it has no step-2
-   spec, so it stays greyed in `00. NC+Interdep` and, under §9.1 O7, a pack carrying
-   that sheet would report an error rather than write a half-transformed block.
-   `04. Cat Losses` was implemented alongside `03`, since a cat section needs it.
 2. **Sheet `08`'s measures.** Both split axes are settled (§2.1); what is counted at each
    intersection — risk count, sum insured, premium — is not.
 3. **Sheet `20. Summary`.** Specified in §9.1 O6 but not yet implemented; it needs at

@@ -864,6 +864,7 @@ def test_derived_figures_are_written_to_the_sheet(workspace, tmp_path):
 
 EPI_T = "02. EPI Projections_Transposed"
 LARGE = "03. Large Losses"
+PROFILE = "05. Risk Profiles"
 
 
 def test_period_order_is_read_from_sheet_00(nomenclature):
@@ -952,9 +953,10 @@ def test_all_data_sheets_process(workspace, tmp_path):
     report = run(workspace, out, tmp_path / "logs")
     assert report.ok and report.rules_ok
     processed = {o.sheet: o.detail for o in report.outcomes if o.status == "processed"}
-    assert set(processed) == {ROW_WISE, TRANSPOSED, EPI, EPI_T, LARGE}
+    assert set(processed) == {ROW_WISE, TRANSPOSED, EPI, EPI_T, LARGE, PROFILE}
     assert processed[EPI] == processed[EPI_T] == "1 block(s), 4 record(s)"
     assert processed[ROW_WISE] == processed[TRANSPOSED] == "1 block(s), 6 record(s)"
+    assert processed[PROFILE] == "1 block(s), 5 record(s)"
 
 
 # ══════════════════════════════════ 03. Large Losses · dates · aggregation

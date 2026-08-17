@@ -173,7 +173,7 @@ class BlockWriter:
         self._put(FIRST_COL, f"Control  (n = {len(block.records)})", ctrl_f, fill=ctrl_fill)
         control_row = self.row
         for i, label in enumerate(headers, start=1):
-            if label not in block.numeric_fields:
+            if label not in block.measure_fields:
                 continue
             letter = col_letter(FIRST_COL + i)
             self._formula(FIRST_COL + i, f"=SUM({letter}{first_data}:{letter}{last_data})",
@@ -183,14 +183,14 @@ class BlockWriter:
         self._put(FIRST_COL, "Expected (computed by tool)", note_f)
         expected_row = self.row
         for i, label in enumerate(headers, start=1):
-            if label not in block.numeric_fields:
+            if label not in block.measure_fields:
                 continue
             self._put(FIRST_COL + i, totals.get(label), note_f, block.number_format(label))
         self.row += 1
 
         self._put(FIRST_COL, "Check", ctrl_f)
         for i, label in enumerate(headers, start=1):
-            if label not in block.numeric_fields:
+            if label not in block.measure_fields:
                 continue
             letter = col_letter(FIRST_COL + i)
             self._formula(
@@ -206,11 +206,11 @@ class BlockWriter:
         totals = {
             m: sum(r.values[m] for r in block.excluded_records
                    if isinstance(r.values.get(m), (int, float)))
-            for m in block.numeric_fields
+            for m in block.measure_fields
         }
         self._put(FIRST_COL, "Excluded records, measure totals", note_f)
         for i, label in enumerate(block.fields, start=1):
-            if label not in block.numeric_fields:
+            if label not in block.measure_fields:
                 continue
             self._put(FIRST_COL + i, totals.get(label), note_f, block.number_format(label))
         self.row += 1
@@ -238,7 +238,8 @@ class BlockWriter:
             self._put(FIRST_COL + i, label, head_f, fill=step2_fill)
         self.row += 1
 
-        calc_names = [c.name for c in result.spec.calculations]
+        calc_names = ([c.name for c in result.spec.calculations]
+                      + [c.name for c in result.spec.cumulative])
         col_of = {label: FIRST_COL + 1 + i for i, label in enumerate(result.columns)}
 
         first_data = self.row
@@ -259,7 +260,22 @@ class BlockWriter:
             self.row += 1
         last_data = self.row - 1
 
-        measures = list(block.numeric_fields)
+        # Cumulative shares, written as live ranges so a reviewer can see the running
+        # sum and the total it is divided by — spec §9.2.1 S17.
+        for cum in result.spec.cumulative:
+            letter = col_letter(col_of[cum.field])
+            for n, _ in enumerate(result.records):
+                row = first_data + n
+                self.row = row
+                self._formula(
+                    col_of[cum.name],
+                    f"=IFERROR(SUM({letter}${first_data}:{letter}{row})"
+                    f"/SUM({letter}${first_data}:{letter}${last_data}),\"\")",
+                    result.computed[cum.name][n], cum.number_format, body_f,
+                )
+            self.row = last_data + 1
+
+        measures = list(block.measure_fields)
         self._put(FIRST_COL, f"Control  (n = {len(result.records)})", ctrl_f, fill=ctrl_fill)
         control_row = self.row
         totals = result.totals()
@@ -287,8 +303,10 @@ class BlockWriter:
         self.row += 1
         if calc_names:
             self._line(
-                f"{', '.join(calc_names)} is value-adding, so no tie-back applies; "
-                "it is written as a live formula over the columns above."
+                f"{', '.join(calc_names)} "
+                f"{'is' if len(calc_names) == 1 else 'are'} value-adding, so no "
+                "tie-back applies; each is written as a live formula over the "
+                "columns above."
             )
         self._write_aggregate(result)
         self._write_figures(result)

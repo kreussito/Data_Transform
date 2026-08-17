@@ -140,9 +140,7 @@ HEADERS_05 = ["Band", "Band from (optional)", "Band to (optional)",
 ATTRS_05 = ["Section", "Currency", "Scale", "Share basis", "Exposure basis",
             "Includes fac", "Layered business", "As at"]
 
-PROVISIONAL = [
-    ("05. Risk Profiles", "05 Profile", HEADERS_05, ATTRS_05),
-]
+PROVISIONAL: list = []
 
 
 # ══════════════════════════════════════════════════════════════ sheet 00
@@ -555,6 +553,65 @@ def combined_loss_sheet(wb, name, *, section, title, losses, events):
     return ws, cached
 
 
+def profile_sheet(wb, name, *, title, blocks_spec, with_bounds):
+    """05. Risk Profiles — one block per line of business.
+
+    ``with_bounds`` decides which of the two shapes the cedent sent: two numeric columns,
+    or a single label that step 2 has to read the bounds off. Both occur; both are
+    supported; only the second produces the "read off Band" note.
+    """
+    ws = wb.create_sheet(name)
+    put(ws, "B1", title, title_f)
+
+    source = {"B": "Band", "C": "From", "D": "To", "E": "Premium",
+              "F": "Risks", "G": "Sum insured"}
+    declared = {"B": "Band", "C": "Band from", "D": "Band to", "E": "Premium",
+                "F": "Number of Risks", "G": "Exposure"}
+    formats = {"C": "#,##0", "D": "#,##0", "E": "#,##0", "F": "#,##0", "G": "#,##0"}
+    if not with_bounds:
+        for column in ("C", "D"):
+            source.pop(column)
+            declared.pop(column)
+            formats.pop(column)
+
+    entries = {
+        2: "Currency = USD",
+        3: "Scale = 1,000",
+        4: "Share basis = 100%",
+        5: "Exposure basis = Sum Insured",
+        6: "Includes fac = yes",
+        7: "Layered business = excluded",
+    }
+
+    row = 11
+    for index, spec in enumerate(blocks_spec, start=1):
+        entries[row - 2] = f"Section_{index} = {spec['section']}"
+        entries[row - 1] = f"As at_{index} = {spec['as_at']}"
+        entries[row] = f"Header_{index}"
+        put(ws, f"B{row - 3}", f"— {spec['section']} —", head_f)
+        end = record_block(
+            ws,
+            header_row=row,
+            selector_col="J",
+            source_labels=source,
+            declared=declared,
+            rows=spec["rows"],
+            formats=formats,
+            note_col="H",
+            total_cols=["E", "F", "G"],
+        )
+        entries[end + 1] = f"Info_{index} = J"
+        row = end + 6
+
+    markers(ws, entries)
+    put(ws, f"B{row - 3}",
+        "One profile per line of business. The top band is open at the top, so its upper "
+        "bound is absent rather than zero.", sub_f)
+    widths(ws, {"A": 32, "B": 22, "C": 12, "D": 12, "E": 12, "F": 10, "G": 14,
+                "H": 44, "J": 10})
+    return ws
+
+
 def multi_section_sheet(wb, name, *, title, kind, blocks_spec):
     """One sheet carrying several section-blocks, stacked — spec §2.3.
 
@@ -651,12 +708,13 @@ def build_engineering():
     """An Engineering treaty — one per-risk section carrying large *and* cat losses."""
     wb = Workbook()
     wb.remove(wb.active)
-    sections = [("Engineering", "per risk", ["01", "02", "03", "04"])]
+    sections = [("Engineering", "per risk", ["01", "02", "03", "04", "05"])]
     datasets = [
         ("01. History", "01 History", HEADERS_01, ATTRS_01),
         ("02. EPI Projections", "02 EPI", HEADERS_02, ATTRS_02),
         ("03. Large Losses", "03 Large", HEADERS_03, ATTRS_03),
         ("04. Cat Losses", "04 Cat", HEADERS_04, ATTRS_04),
+        ("05. Risk Profiles", "05 Profile", HEADERS_05, ATTRS_05),
     ]
     build_sheet00(wb, treaty_type="Engineering", sections=sections, datasets=datasets)
 
@@ -682,6 +740,12 @@ def build_engineering():
         wb, "04. Cat Losses", section="Engineering",
         title="04. Cat Losses — Engineering", events=ENGINEERING_EVENTS,
         with_claims=True,
+    )
+    profile_sheet(
+        wb, "05. Risk Profiles", title="05. Risk Profiles — Engineering",
+        with_bounds=False,
+        blocks_spec=[{"section": "Engineering", "as_at": "30.09.2025",
+                      "rows": _profile_rows(PROFILE_ENGINEERING, False)}],
     )
     return wb, "Intake_Engineering_v1.xlsx"
 
@@ -727,10 +791,54 @@ FIRE_LOSSES = [
     ("2025", "Cold store collapse, Milan", 1420, date(2025, 2, 11)),
 ]
 
+# One risk profile per line of business. Bands in the sheet's own scale (1,000), so
+# "> 25,000" is a sum insured above 25 million. The top band is open at the top: its
+# upper bound is absent, never zero.
+#
+# label, from, to, premium, risks, exposure
+PROFILE_FIRE = [
+    ("0 – 1 000", 0, 1_000, 2_150, 620, 310_000),
+    ("1 001 – 5 000", 1_001, 5_000, 4_900, 480, 1_290_000),
+    ("5 001 – 10 000", 5_001, 10_000, 5_300, 260, 1_880_000),
+    ("10 001 – 25 000", 10_001, 25_000, 4_700, 118, 2_010_000),
+    ("> 25 000", 25_000, None, 3_100, 27, 1_140_000),
+]
+PROFILE_ENGINEERING = [
+    ("0 – 1 000", 0, 1_000, 1_150, 210, 96_000),
+    ("1 001 – 5 000", 1_001, 5_000, 2_800, 165, 430_000),
+    ("5 001 – 20 000", 5_001, 20_000, 3_450, 78, 780_000),
+    ("> 20 000", 20_000, None, 2_900, 27, 940_000),
+]
+PROFILE_EQ = [
+    ("0 – 2 500", 0, 2_500, 1_050, 380, 240_000),
+    ("2 501 – 10 000", 2_501, 10_000, 2_300, 310, 690_000),
+    ("10 001 – 50 000", 10_001, 50_000, 2_750, 190, 1_420_000),
+    ("> 50 000", 50_000, None, 1_480, 80, 980_000),
+]
+PROFILE_WIND = [
+    ("0 – 2 500", 0, 2_500, 1_320, 450, 290_000),
+    ("2 501 – 10 000", 2_501, 10_000, 2_650, 370, 810_000),
+    ("10 001 – 50 000", 10_001, 50_000, 3_180, 240, 1_680_000),
+    ("> 50 000", 50_000, None, 1_910, 90, 1_120_000),
+]
+
+
+def _profile_rows(profile, with_bounds: bool):
+    rows = []
+    for label, low, high, premium, risks, exposure in profile:
+        row = {"B": label, "E": premium, "F": risks, "G": exposure}
+        if with_bounds:
+            row["C"] = low
+            if high is not None:
+                row["D"] = high          # the open top band has no upper bound
+        rows.append(row)
+    return rows
+
+
 CAT_SECTIONS = [
-    ("Fire", "per risk", ["01", "02", "03"]),
-    ("Earthquake", "cat", ["01", "02", "04"]),
-    ("Windstorm", "cat", ["01", "02", "04"]),
+    ("Fire", "per risk", ["01", "02", "03", "05"]),
+    ("Earthquake", "cat", ["01", "02", "04", "05"]),
+    ("Windstorm", "cat", ["01", "02", "04", "05"]),
 ]
 
 
@@ -757,6 +865,7 @@ def build_fire_cat():
         ("02. EPI Cat", "02 EPI Cat", HEADERS_02, ATTRS_02),
         ("03. Large Losses Fire", "03 Large Fire", HEADERS_03, ATTRS_03),
         ("04. Cat Losses", "04 Cat", HEADERS_04, ATTRS_04),
+        ("05. Risk Profiles", "05 Profile", HEADERS_05, ATTRS_05),
     ]
     build_sheet00(wb, treaty_type="Fire + Nat Cat", sections=CAT_SECTIONS,
                   datasets=datasets)
@@ -793,6 +902,18 @@ def build_fire_cat():
             {"section": "Windstorm", "rows": _event_rows(WIND_EVENTS)},
         ],
     )
+    profile_sheet(
+        wb, "05. Risk Profiles", title="05. Risk Profiles — Fire, EQ and Windstorm",
+        with_bounds=True,
+        blocks_spec=[
+            {"section": "Fire", "as_at": "30.09.2025",
+             "rows": _profile_rows(PROFILE_FIRE, True)},
+            {"section": "Earthquake", "as_at": "30.09.2025",
+             "rows": _profile_rows(PROFILE_EQ, True)},
+            {"section": "Windstorm", "as_at": "30.09.2025",
+             "rows": _profile_rows(PROFILE_WIND, True)},
+        ],
+    )
     return wb, "Intake_FireCat_v1.xlsx"
 
 
@@ -810,6 +931,9 @@ def build_fire_eq_wind():
         ("03. Large Losses Fire", "03 Large Fire", HEADERS_03, ATTRS_03),
         ("04. Cat Losses EQ", "04 Cat EQ", HEADERS_04, ATTRS_04),
         ("04. Cat Losses Wind", "04 Cat Wind", HEADERS_04, ATTRS_04),
+        ("05. Risk Profiles Fire", "05 Profile Fire", HEADERS_05, ATTRS_05),
+        ("05. Risk Profiles EQ", "05 Profile EQ", HEADERS_05, ATTRS_05),
+        ("05. Risk Profiles Wind", "05 Profile Wind", HEADERS_05, ATTRS_05),
     ]
     build_sheet00(wb, treaty_type="Fire + Nat Cat", sections=CAT_SECTIONS,
                   datasets=datasets)
@@ -838,6 +962,17 @@ def build_fire_eq_wind():
     cat_sheet(wb, "04. Cat Losses Wind", section="Windstorm",
               title="04. Cat Losses — Windstorm", events=WIND_EVENTS,
               with_claims=False)
+
+    for sheet, section, profile in [
+        ("05. Risk Profiles Fire", "Fire", PROFILE_FIRE),
+        ("05. Risk Profiles EQ", "Earthquake", PROFILE_EQ),
+        ("05. Risk Profiles Wind", "Windstorm", PROFILE_WIND),
+    ]:
+        profile_sheet(
+            wb, sheet, title=f"05. Risk Profiles — {section}", with_bounds=True,
+            blocks_spec=[{"section": section, "as_at": "30.09.2025",
+                          "rows": _profile_rows(profile, True)}],
+        )
     return wb, "Intake_FireEQWind_v1.xlsx"
 
 
@@ -858,12 +993,13 @@ def build_engineering_combined():
     """
     wb = Workbook()
     wb.remove(wb.active)
-    sections = [("Engineering", "per risk", ["01", "02", "03", "04"])]
+    sections = [("Engineering", "per risk", ["01", "02", "03", "04", "05"])]
     datasets = [
         ("01. History", "01 History", HEADERS_01, ATTRS_01),
         ("02. EPI Projections", "02 EPI", HEADERS_02, ATTRS_02),
         ("03. Losses", "03 Large", HEADERS_03, ATTRS_03),
         ("04. Cat Losses", "04 Cat", HEADERS_04, ATTRS_04),
+        ("05. Risk Profiles", "05 Profile", HEADERS_05, ATTRS_05),
     ]
     build_sheet00(wb, treaty_type="Engineering", sections=sections, datasets=datasets)
 
@@ -885,6 +1021,12 @@ def build_engineering_combined():
         wb, "03. Losses", section="Engineering",
         title="03. Losses — Engineering (large losses and cat events in one list)",
         losses=ENGINEERING_LOSSES, events=ENGINEERING_EVENTS,
+    )
+    profile_sheet(
+        wb, "05. Risk Profiles", title="05. Risk Profiles — Engineering",
+        with_bounds=False,
+        blocks_spec=[{"section": "Engineering", "as_at": "30.09.2025",
+                      "rows": _profile_rows(PROFILE_ENGINEERING, False)}],
     )
     return wb, "Intake_EngineeringCombined_v1.xlsx", cached
 
