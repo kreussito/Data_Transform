@@ -127,34 +127,60 @@ def _sort_key(record: Record, fields, order=None, numeric=False):
     return key
 
 
-def _derive_bounds(block: Block, spec: Step2Spec):
-    """Read the band bounds off the label where the source did not supply them.
+def _span(record, bounds) -> str:
+    """A band's name when the source gave no label — its bounds are its identity."""
+    lower, upper = record.values.get(bounds.lower), record.values.get(bounds.upper)
+    return (f"{'open' if lower is None else format(lower, ',.0f')} – "
+            f"{'open' if upper is None else format(upper, ',.0f')}")
 
-    Returns ``(records, derived field names, note)``. The records are **copies**: step 1
-    holds what the sheet says and must not gain a column step 2 worked out (S11).
+
+def _derive_bounds(block: Block, spec: Step2Spec):
+    """Make sure step 2 always has both bounds, however the source supplied them.
+
+    Three shapes, one outcome — spec §2.4:
+
+    ==================================== ==================================================
+    two numeric columns                  extracted; nothing is worked out
+    a label only (``1 - 1,000,000``)     the bounds are read off it and reported
+    two columns and no label             extracted; the band is named by its own bounds
+    ==================================== ==================================================
+
+    Returns ``(records, derived field names, continuity findings)``. Where anything is
+    derived the records are **copies**: step 1 holds what the sheet says and must not
+    gain a column step 2 worked out (S11).
     """
     from .bands import continuity, parse_band
 
     bounds = spec.bounds
-    if bounds is None or bounds.label not in block.fields:
+    if bounds is None:
         return list(block.records), (), None
 
+    has_label = bounds.label in block.fields
     missing = [f for f in (bounds.lower, bounds.upper) if f not in block.fields]
-    if not missing:
-        pairs = [(r.values.get(bounds.label), r.values.get(bounds.lower),
-                  r.values.get(bounds.upper)) for r in block.records]
-        return list(block.records), (), continuity(pairs)
 
-    records, pairs = [], []
-    for record in block.records:
-        lower, upper = parse_band(record.values.get(bounds.label), record.source_ref)
-        values = dict(record.values)
-        values.setdefault(bounds.lower, lower)
-        values.setdefault(bounds.upper, upper)
-        records.append(Record(record.source_ref, values, record.confidence))
-        pairs.append((record.values.get(bounds.label), values[bounds.lower],
-                      values[bounds.upper]))
-    return records, tuple(missing), continuity(pairs)
+    if missing and not has_label:
+        raise ExtractionError(
+            f"{block.sheet_name!r} block {block.index}: this block extracts neither "
+            f"{' nor '.join(repr(f) for f in missing)} nor {bounds.label!r}, so the band "
+            f"bounds cannot be produced. Declare the two bound columns in the extraction "
+            f"row, or a label they can be read off."
+        )
+
+    records, derived = list(block.records), ()
+    if missing:
+        records = []
+        for record in block.records:
+            lower, upper = parse_band(record.values.get(bounds.label), record.source_ref)
+            values = dict(record.values)
+            values.setdefault(bounds.lower, lower)
+            values.setdefault(bounds.upper, upper)
+            records.append(Record(record.source_ref, values, record.confidence))
+        derived = tuple(missing)
+
+    pairs = [(r.values.get(bounds.label) or _span(r, bounds),
+              r.values.get(bounds.lower), r.values.get(bounds.upper))
+             for r in records]
+    return records, derived, continuity(pairs)
 
 
 def _cumulative(records, spec: Step2Spec) -> dict[str, list[float | None]]:

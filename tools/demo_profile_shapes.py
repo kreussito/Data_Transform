@@ -7,6 +7,7 @@ The same portfolio, banded the same way, written down three different ways:
 ``05. Profile two columns``           Lower and Upper as separate numeric columns
 ``05. Profile one column``            one label per band: ``1-1,000,000``
 ``05. Profile European``              the same labels in ``1.000.000`` grouping
+``05. Profile bounds only``           the two columns and **no label at all**
 ===================================== ==============================================
 
 The point is that all three produce **identical** step-2 tables. Presentation is not
@@ -97,7 +98,7 @@ def build_sheet00(wb):
 
     put(ws, "B5", "05. Risk Profiles", body_f)
     put(ws, "C5", "05 Profile", body_f)
-    headers = ["Band", "Band from (optional)", "Band to (optional)",
+    headers = ["Band (optional)", "Band from (optional)", "Band to (optional)",
                "Premium", "Number of Risks", "Exposure"]
     for i, text in enumerate(headers):
         put(ws, f"{chr(68 + i)}5", text, body_f, blue)
@@ -139,7 +140,8 @@ def build_sheet00(wb):
 
 
 # ══════════════════════════════════════════════════════════ profile sheets
-def profile_sheet(wb, name, *, title, note, with_bounds, group=anglo):
+def profile_sheet(wb, name, *, title, note, with_bounds, group=anglo,
+                  with_label=True):
     ws = wb.create_sheet(name)
     put(ws, "B1", title, title_f)
     put(ws, "B2", note, sub_f)
@@ -164,11 +166,17 @@ def profile_sheet(wb, name, *, title, note, with_bounds, group=anglo):
         source = [source[0]] + source[3:]
         declared = [declared[0]] + declared[3:]
         columns = "BEFG"
+    if not with_label:
+        # The label column still holds the cedent's text; it is simply not declared in
+        # the extraction row, so the tool never reads it. The bounds carry the identity.
+        declared = [""] + declared[1:]
 
     for col, text in zip(columns, source):
         put(ws, f"{col}10", text, inert_f)
     put(ws, "H10", "← source header, never read", sub_f)
     for col, text in zip(columns, declared):
+        if not text:
+            continue
         put(ws, f"{col}11", text, head_f, blue).border = box
     put(ws, "H11",
         "← extraction row: the bounds are declared" if with_bounds
@@ -225,6 +233,13 @@ def build(out: Path = OUT):
         note="The same bands written as '1-1,000,000'. Step 1 shows the label as it "
              "stands; step 2 reads the two bounds off it and says what it read.",
         with_bounds=False,
+    )
+    profile_sheet(
+        wb, "05. Profile bounds only",
+        title="05. Risk Profile — the two columns, no label declared",
+        note="The Band column is left out of the extraction row entirely. Step 2 still "
+             "produces both bounds, and names each band by them.",
+        with_bounds=True, with_label=False,
     )
     profile_sheet(
         wb, "05. Profile European",

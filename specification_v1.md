@@ -142,7 +142,7 @@ the columns in exactly that order (§9.2 S2), so the declaration *is* the layout
 
 | Field | Type | |
 |---|---|---|
-| `Band` | text | the cedent's own label — the record identity, verbatim |
+| `Band` | text | the cedent's own label, verbatim — **optional** |
 | `Band from` | number | lower bound — **optional** |
 | `Band to` | number | upper bound — **optional** |
 | `Premium` | number | |
@@ -159,11 +159,27 @@ bands, which cannot be done against bounds that exist only as prose. The label i
 for identity — never parsed, exactly as `Year` is (§8.4) — and the numbers are what the
 machine works with.
 
-**Why the bounds are optional.** A band arrives either way: as two numeric columns, or as
-a single label — `1-10,000`, `10,001 - 20,000`, `> 1,000,000`. Where the columns exist
-they are extracted. Where they do not, **step 2 reads the bounds off the label** and
-writes what it read. That division is not a convenience: step 1 carries only what the
-sheet says (S11), and reading `1` and `10,000` out of `"1-10,000"` is interpretation.
+**Why all three band fields are optional.** A band arrives in three shapes, and
+**step 2 always ends up with both bounds**:
+
+| The source gives | Step 1 shows | Step 2 does |
+|---|---|---|
+| two numeric columns | both bounds | nothing to work out |
+| one label — `1-1,000,000` | the label | reads the bounds off it, and reports what it read |
+| the two columns, no label | both bounds | names each band by its own bounds |
+
+What must *not* happen is neither: a block extracting no bounds and no label cannot
+produce a profile, and says so rather than sorting on nothing.
+
+The label is optional because **a band's identity is its bounds**. `1-1,000,000` and
+`1 – 1.000.000` are the same band written two ways; the two numbers are not. Where a
+label exists it is kept verbatim and never parsed for identity — the same treatment
+`Year` gets (§8.4) — but nothing downstream depends on it.
+
+Where the columns exist they are extracted. Where they do not, **step 2 reads the bounds
+off the label** and writes what it read. That division is not a convenience: step 1
+carries only what the sheet says (S11), and reading `1` and `10,000` out of `"1-10,000"`
+is interpretation.
 
 The parse follows the same discipline as decimals (§8.4): **unambiguous forms are read,
 ambiguous ones are fatal.** A label nobody can read without guessing stops the run and

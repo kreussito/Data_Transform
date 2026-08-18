@@ -128,10 +128,11 @@ RULES = [
 # Declared in the order a profile is read: what it is, where it sits, what it earns,
 # then what it is made of. Step 2 writes the columns in exactly this order — spec §9.2 S2.
 #
-# The bounds are optional because a band arrives either way: as two numeric columns, or
-# as one label ("1 - 10,000"). Where they are absent step 2 reads them off the label and
-# says so — interpretation belongs to step 2, never to step 1 (S11).
-HEADERS_05 = ["Band", "Band from (optional)", "Band to (optional)",
+# All three band fields are optional, because a band arrives as two numeric columns, as
+# one label ("1 - 10,000"), or as the columns with no label at all. Step 2 always ends up
+# with both bounds: where they are absent it reads them off the label and says so, and
+# where the label is absent the bounds name the band. What must not happen is neither.
+HEADERS_05 = ["Band (optional)", "Band from (optional)", "Band to (optional)",
               "Premium", "Number of Risks", "Exposure"]
 
 # A profile is a snapshot of a portfolio, and three things decide whether its figures are

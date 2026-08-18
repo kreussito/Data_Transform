@@ -100,7 +100,7 @@ datasets = [
     # Bounds are optional: a band arrives either as two numeric columns or as one
     # label ("1 - 10,000"). Where absent, step 2 reads them off the label and says so.
     (9, "05. Risk Profiles", "05 Profile",
-     ["Band", "Band from (optional)", "Band to (optional)",
+     ["Band (optional)", "Band from (optional)", "Band to (optional)",
       "Premium", "Number of Risks", "Exposure"],
      ["Section", "Currency", "Scale", "Share basis", "Exposure basis",
       "Includes fac", "Layered business", "As at"], False),

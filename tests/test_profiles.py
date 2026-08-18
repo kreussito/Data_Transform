@@ -9,6 +9,7 @@ import pytest
 from openpyxl import load_workbook
 
 from datatransform.bands import BandError, continuity, parse_band
+from datatransform.model import ExtractionError
 from datatransform.extract import extract_sheet, last_non_empty_row
 from datatransform.markers import read_markers
 from datatransform.nomenclature import read_nomenclature
@@ -249,11 +250,11 @@ def _demo(tmp_path):
                   for b in blocks}
 
 
-def test_three_presentations_of_one_profile_agree(tmp_path):
-    """Bounds in two columns, inside one label, or in European grouping — same profile."""
+def test_every_presentation_of_one_profile_agrees(tmp_path):
+    """Two columns, one label, bounds without a label, European grouping — one profile."""
     _, shapes = _demo(tmp_path)
     assert set(shapes) == {"05. Profile two columns", "05. Profile one column",
-                           "05. Profile European"}
+                           "05. Profile bounds only", "05. Profile European"}
 
     def figures(result):
         return [(r.values["Band from"], r.values["Band to"], r.values["Premium"],
@@ -278,6 +279,44 @@ def test_only_the_declared_shape_extracts_the_bounds_in_step_1(tmp_path):
 
     assert "Band from" not in one_column[0].fields
     assert one_column[1].derived_fields == ("Band from", "Band to")
+
+
+def test_step_2_always_returns_both_bounds(tmp_path):
+    """However the source presented them — spec §2.4."""
+    _, shapes = _demo(tmp_path)
+    for name, (_, result) in shapes.items():
+        assert "Band from" in result.declared_columns, name
+        assert "Band to" in result.declared_columns, name
+        assert all(r.values["Band from"] is not None for r in result.records), name
+
+
+def test_a_profile_needs_no_label_column(tmp_path):
+    """The bounds carry the band's identity; the label is a human convenience."""
+    _, shapes = _demo(tmp_path)
+    block, result = shapes["05. Profile bounds only"]
+
+    assert "Band" not in block.fields               # never declared, never read
+    assert result.derived_fields == ()              # nothing to work out
+    assert result.declared_columns == (
+        "Band from", "Band to", "Premium", "Number of Risks", "Exposure",
+    )
+    assert [r.values["Band from"] for r in result.records] == [
+        1, 1_000_001, 5_000_001, 25_000_000,
+    ]
+
+
+def test_a_block_with_neither_label_nor_bounds_is_fatal():
+    """Nothing to extract and nothing to read off — say so rather than sort on nothing."""
+    from datatransform.specs import Bounds, Step2Spec
+
+    nomenclature, profiles = _profiles(FIRE)
+    block = profiles[0]
+    block.address_map = {k: v for k, v in block.address_map.items()
+                         if k not in ("Band", "Band from", "Band to")}
+    spec = Step2Spec(sort_by=("Premium",),
+                     bounds=Bounds("Band", "Band from", "Band to"))
+    with pytest.raises(ExtractionError, match="band bounds cannot be produced"):
+        apply_step2(block, spec, nomenclature)
 
 
 def test_both_thousands_conventions_are_read(tmp_path):
