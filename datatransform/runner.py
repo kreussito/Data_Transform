@@ -13,6 +13,7 @@ from openpyxl import load_workbook
 
 from .crosschecks import hypotheses_from, results_for, run_rules
 from .extract import _number_hypotheses, extract_sheet, last_non_empty_row
+from .growth import growth_tables
 from .lossshare import EXCEEDS, OK, loss_share_tables
 from .markers import read_markers
 from .model import Block, ExtractionError
@@ -20,7 +21,7 @@ from .nomenclature import Nomenclature, read_nomenclature, sheet_sort_key
 from .recalc import inject
 from .specs import SPEC_VERSION, step2_for
 from .transform import Step2Result, apply_step2
-from .writer import write_blocks, write_loss_share
+from .writer import write_blocks, write_growth, write_loss_share
 
 TOOL_VERSION = "0.1.0"
 
@@ -43,6 +44,7 @@ class RunReport:
     outcomes: list[SheetOutcome] = field(default_factory=list)
     rule_results: list = field(default_factory=list)
     loss_share: list = field(default_factory=list)
+    growth: list = field(default_factory=list)
     injected: int = 0
 
     @property
@@ -194,6 +196,16 @@ def run(source: str | Path, output: str | Path | None = None,
             if sheet in out_wb.sheetnames:
                 formula_values.extend(write_loss_share(out_wb[sheet], table))
 
+    # Pass 4 — exposure against premium, at the end of each aggregate sheet. It reads
+    # 06/07 alongside 01 and 02, so it can only be built once everything is transformed.
+    every_result = [r for o in report.outcomes for r in o.results]
+    report.growth = growth_tables(nomenclature, blocks, every_result)
+    _log_growth(report.growth, debug, process)
+    for table in report.growth:
+        for sheet in table.sheets:
+            if sheet in out_wb.sheetnames:
+                formula_values.extend(write_growth(out_wb[sheet], table))
+
     out_wb.save(output)
     result = inject(output, formula_values)
     report.injected = result["injected"]
@@ -278,6 +290,31 @@ def _log_rules(results, nomenclature, debug, process) -> None:
                      r.label, r.status.upper(), r.rule.left, r.rule.relation,
                      r.rule.right, r.detail)
         debug.info("rule %s: %s (%s)", r.label, r.status, r.detail)
+
+
+def _log_growth(tables, debug, process) -> None:
+    """Exposure against premium — spec §10.4."""
+    if not tables:
+        return
+    process.info("")
+    process.info("Exposure and premium growth (§10.4)")
+    for table in tables:
+        process.info("  %s [%s] — written at the end of %s",
+                     table.section, table.role, ", ".join(table.sheets))
+        if table.skipped:
+            process.info("    NOT EVALUATED — %s", table.skipped)
+            continue
+        for version in table.versions:
+            change = "" if version.change is None else f"{version.change:+.1%}"
+            process.info("    %-20s %-12s %14s %8s",
+                         version.period, version.as_at, f"{version.exposure:,.0f}", change)
+        rate = table.implied_rate_change
+        process.info("    exposure %s · premium %s · implied rate %s  [%s]",
+                     "n/a" if table.exposure_growth is None else f"{table.exposure_growth:+.1%}",
+                     "n/a" if table.premium_growth is None else f"{table.premium_growth:+.1%}",
+                     "n/a" if rate is None else f"{rate:+.1%}", table.status)
+        if table.status != OK:
+            debug.warning("growth %s: %s (implied rate %s)", table.section, table.status, rate)
 
 
 def _log_loss_share(tables, debug, process) -> None:

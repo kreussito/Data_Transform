@@ -78,6 +78,7 @@ decision and interpretation.
 ```bash
 python tools/build_v1.py             # Intake_v1.xlsx
 python tools/build_intake.py         # the other four
+python tools/build_mexico.py         # Intake_Mexico_v1.xlsx — the cat aggregates
 python tools/demo_profile_shapes.py  # the three risk-profile presentations
 ```
 
@@ -95,6 +96,7 @@ recalculation.
 | `Intake_EngineeringCombined_v1.xlsx` | The same treaty with both loss datasets in **one list** |
 | `Intake_FireCat_v1.xlsx` | Fire + Nat Cat — the two cat sections share one sheet |
 | `Intake_FireEQWind_v1.xlsx` | Fire + Earthquake + Hurricane — a sheet per section |
+| `Intake_Mexico_v1.xlsx` | Mexican cat aggregates — datasets `06` / `07`, three versions per sheet |
 | `datatransform/` | Implementation |
 | `tools/` | Generators for the reference workbooks |
 | `tests/` | Test suite covering the specification's rules |

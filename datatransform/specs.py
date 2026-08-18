@@ -92,6 +92,38 @@ class Cumulative:
 
 
 @dataclass(frozen=True)
+class Complete:
+    """Every member of a declared catalogue must appear — spec §9.2.1 S18.
+
+    A cat aggregate lists only the zones the cedent has exposure in. The zones with
+    none are exactly the ones worth seeing, so the missing ones are added with 0.
+    Adding zeros cannot move a total, so this stays value-preserving.
+
+    ``catalogue_attribute`` names the attribute that selects which list applies —
+    ``Zone scheme = Mexico EQ`` and ``Mexico Wind`` are different zonings of the same
+    country and must not be mixed.
+    """
+
+    key: str
+    catalogue_attribute: str
+
+
+@dataclass(frozen=True)
+class Identity:
+    """A declared field that equals the sum of others — spec §9.2.1 S19.
+
+    Three shapes, like the band bounds:
+
+    * both sides supplied — **checked**, and a disagreement is a finding
+    * the total absent — **derived**, and said so
+    * the parts absent — the total stands alone, and the gap is named
+    """
+
+    total: str
+    parts: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Step2Spec:
     """Step-2 mechanics.
 
@@ -108,6 +140,8 @@ class Step2Spec:
     cumulative: tuple[Cumulative, ...] = field(default_factory=tuple)
     bounds: Bounds | None = None
     numeric_sort: bool = False       # sort on the number, not the label
+    complete: Complete | None = None
+    identity: Identity | None = None
 
 
 STEP2: dict[str, Step2Spec] = {
@@ -200,6 +234,19 @@ STEP2: dict[str, Step2Spec] = {
             Cumulative("Cumulative premium %", "Premium"),
         ),
     ),
+    # 06 and 07 are the same dataset zoned differently — one profile of the portfolio
+    # by geography, because cat losses correlate spatially. Spec §2.5.
+    "06 EQ Aggs": Step2Spec(
+        sort_by=("Zone",),
+        ascending=True,
+        complete=Complete(key="Zone", catalogue_attribute="Zone scheme"),
+        identity=Identity(total="Total", parts=(
+        "Res Building", "Res Content", "Res BI",
+        "Com Building", "Com Content", "Com BI",
+        "Ind Building", "Ind Content", "Ind BI",
+        )),
+        cumulative=(Cumulative("Cumulative exposure %", "Total"),),
+    ),
     "03 Large": Step2Spec(
         sort_by=("Year", "Date of Loss"),
         ascending=True,
@@ -215,6 +262,7 @@ STEP2: dict[str, Step2Spec] = {
 }
 
 # The transposed reference sheet is the same dataset in a different orientation.
+STEP2["07 Wind Aggs"] = STEP2["06 EQ Aggs"]
 STEP2["01 History_T"] = STEP2["01 History"]
 STEP2["02 EPI_T"] = STEP2["02 EPI"]
 
@@ -238,4 +286,6 @@ STEP2_BY_ROLE: dict[str, Step2Spec] = {
     "03": STEP2["03 Large"],
     "04": STEP2["04 Cat"],
     "05": STEP2["05 Profile"],
+    "06": STEP2["06 EQ Aggs"],
+    "07": STEP2["06 EQ Aggs"],      # windstorm: the same dataset, a different zoning
 }

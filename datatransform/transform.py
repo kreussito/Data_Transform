@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass, field
 
 from .model import Block, Confidence, ExtractionError, Hypothesis, Record
+from .nomenclature import norm
 from .specs import AggregateSpec, Step2Spec
 
 FIELD = re.compile(r"\{([^}]+)\}")
@@ -183,6 +184,82 @@ def _derive_bounds(block: Block, spec: Step2Spec):
     return records, derived, continuity(pairs)
 
 
+def _complete(block: Block, spec: Step2Spec, records, nomenclature):
+    """Add the catalogue members the source is silent about, with 0 — spec §9.2.1 S18.
+
+    A cat aggregate lists the zones the cedent has exposure in. The zones with none are
+    the ones worth seeing: absent reads as "no data", zero reads as "nothing there".
+    Adding zeros cannot move a total, so this stays value-preserving.
+    """
+    rule = spec.complete
+    if rule is None or nomenclature is None or rule.key not in block.fields:
+        return records, []
+
+    declared = block.attributes.get(rule.catalogue_attribute)
+    if declared is None:
+        return records, []
+    catalogue = nomenclature.zones_for(str(declared.value))
+    if not catalogue:
+        raise ExtractionError(
+            f"{block.sheet_name!r} block {block.index}: "
+            f"{rule.catalogue_attribute} = {declared.value!r}, which sheet 00 ⟦ZONES⟧ "
+            "does not list — the members with no exposure cannot be shown without it"
+        )
+
+    present = {norm(r.values.get(rule.key)) for r in records}
+    filled = []
+    for member in catalogue:
+        if norm(member) in present:
+            continue
+        values = {rule.key: member}
+        values.update({m: 0.0 for m in block.measure_fields})
+        records.append(Record("—", values))
+        filled.append(member)
+    return records, filled
+
+
+def _identity(block: Block, spec: Step2Spec, records):
+    """Reconcile a declared total against its parts — spec §9.2.1 S19.
+
+    Derived where the source omits it, checked where the source supplies it, and left
+    alone where the parts are missing — the same three shapes as the band bounds.
+    """
+    rule = spec.identity
+    if rule is None:
+        return records, (), None
+
+    parts = [p for p in rule.parts if p in block.fields]
+    if not parts:
+        return records, (), (
+            f"{rule.total} stands alone: the source declares none of "
+            f"{rule.parts[0]} … {rule.parts[-1]}, so the split cannot be reconciled"
+        )
+
+    if rule.total in block.fields:
+        off = []
+        for record in records:
+            total = record.values.get(rule.total)
+            summed = sum(record.values[p] for p in parts
+                         if isinstance(record.values.get(p), (int, float)))
+            if isinstance(total, (int, float)) and abs(total - summed) > 0.5:
+                off.append(f"{record.values.get(rule.total, '')}"
+                           f"{record.source_ref}: {total:,.0f} vs {summed:,.0f}")
+        note = (f"{rule.total} checked against {len(parts)} part(s): "
+                + ("all agree" if not off else "DISAGREES — " + "; ".join(off[:5])))
+        return records, (), note
+
+    out = []
+    for record in records:
+        values = dict(record.values)
+        values[rule.total] = sum(values[p] for p in parts
+                                 if isinstance(values.get(p), (int, float)))
+        out.append(Record(record.source_ref, values, record.confidence))
+    return out, (rule.total,), (
+        f"{rule.total} derived as the sum of {len(parts)} declared part(s) — the source "
+        "does not supply it (value-adding, but arithmetic only)"
+    )
+
+
 def _cumulative(records, spec: Step2Spec) -> dict[str, list[float | None]]:
     """Running share of each column's total — spec §9.2.1 S17."""
     out = {}
@@ -319,7 +396,10 @@ def apply_step2(block: Block, spec: Step2Spec, nomenclature=None, blocks=None) -
     order = getattr(nomenclature, "period_order", None) or {}
 
     # Bounds first: the sort depends on them, and they may have to be read off the label.
-    source, derived_fields, gaps = _derive_bounds(block, spec)
+    source, bound_fields, gaps = _derive_bounds(block, spec)
+    source, total_field, identity_note = _identity(block, spec, source)
+    derived_fields = bound_fields + total_field
+    source, filled = _complete(block, spec, source, nomenclature)
 
     records = sorted(source,
                      key=lambda r: _sort_key(r, spec.sort_by, order, spec.numeric_sort),
@@ -351,7 +431,9 @@ def apply_step2(block: Block, spec: Step2Spec, nomenclature=None, blocks=None) -
         sort_note += f", period order {ranked}"
 
     notes = []
-    if derived_fields:
+    if bound_fields:
+        # Only the band bounds are read off a label; a derived Total speaks for itself
+        # through identity_note below.
         shown = "; ".join(
             f"{r.values.get(spec.bounds.label)!r} → "
             f"{'' if r.values.get(spec.bounds.lower) is None else format(r.values[spec.bounds.lower], ',.0f')}"
@@ -360,13 +442,20 @@ def apply_step2(block: Block, spec: Step2Spec, nomenclature=None, blocks=None) -
             for r in records[:3]
         )
         notes.append(
-            f"{' and '.join(derived_fields)} read off {spec.bounds.label} — the source "
+            f"{' and '.join(bound_fields)} read off {spec.bounds.label} — the source "
             f"declares no such column (value-adding): {shown}"
             + (" …" if len(records) > 3 else "")
         )
 
     available = set(block.fields) | set(derived_fields)
     shown_columns = [h for h in block.dataset.headers if h in available]
+    if identity_note:
+        notes.append(identity_note)
+    if filled:
+        notes.append(
+            f"{len(filled)} declared {spec.complete.key.lower()}(s) with no entry in the "
+            f"source, shown as 0: {', '.join(filled)} (value-preserving)"
+        )
     notes.append(f"{sort_note} (value-preserving)")
     notes.append(
         f"columns ordered as declared in sheet 00: "

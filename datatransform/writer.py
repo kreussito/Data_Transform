@@ -536,3 +536,90 @@ def _column_total(table, split, offset: int):
         return sum(r.by_role.get(role, 0.0) for r in table.rows)
     declared, incurred = table.totals()
     return declared if offset == len(split) + 1 else incurred
+
+
+def write_growth(ws, table) -> list[tuple[str, str, float]]:
+    """Exposure against premium, at the end of the aggregate sheet — spec §10.4.
+
+    Growth is never an error here. A portfolio that shrinks is a fact about the book, so
+    the block reports and warns; nothing in it can fail a run.
+    """
+    from .extract import last_non_empty_row
+    from .growth import NO_BASIS, OK
+
+    writer = BlockWriter(ws, last_non_empty_row(ws) + 1 + GAP)
+    writer._put(FIRST_COL, anchor_tag(f"{table.section} {table.role}", "GROWTH"), anchor_f)
+    writer.row += 1
+    writer._put(FIRST_COL, table.title.upper(), title_f, fill=ctrl_fill)
+    writer.row += 1
+
+    if table.skipped:
+        writer._line(f"NOT EVALUATED — {table.skipped}.")
+        _widen(ws)
+        return writer.formula_values
+
+    writer._line(
+        "Exposure is the sum of the zone totals of each version; premium is the "
+        f"expiring year from 01 and the renewal year from 02, since 01 carries no "
+        f"forward figure."
+    )
+    writer._line(
+        f"Implied rate change = (1 + premium growth) ÷ (1 + exposure growth) − 1. "
+        f"Beyond ±{table.threshold:.0%} it is flagged — a warning, never an error: a book "
+        "may shrink or grow for good reasons."
+    )
+
+    for i, text in enumerate(["Version", "As at", "Exposure", "Change"]):
+        writer._put(FIRST_COL + i, text, head_f, fill=ctrl_fill)
+    writer.row += 1
+    for version in table.versions:
+        writer._put(FIRST_COL, version.period, body_f, "@")
+        writer._put(FIRST_COL + 1, version.as_at, body_f, "@")
+        writer._put(FIRST_COL + 2, version.exposure, body_f, "#,##0")
+        if version.change is not None:
+            writer._put(FIRST_COL + 3, version.change, body_f, "0.0%")
+        writer.row += 1
+
+    writer.row += 1
+    for label, pair in (("Premium, expiring year", table.premium_from),
+                        ("Premium, renewal year", table.premium_to)):
+        writer._put(FIRST_COL, label, note_f)
+        if pair is not None:
+            writer._put(FIRST_COL + 1, pair[0], note_f, "@")
+            writer._put(FIRST_COL + 2, pair[1], note_f, "#,##0")
+        else:
+            writer._put(FIRST_COL + 1, "not found", note_f)
+        writer.row += 1
+
+    writer.row += 1
+    for label, value, fmt in (
+        ("Exposure growth", table.exposure_growth, "0.0%"),
+        ("Premium growth", table.premium_growth, "0.0%"),
+        ("Implied rate change", table.implied_rate_change, "0.0%"),
+    ):
+        writer._put(FIRST_COL, label, ctrl_f)
+        if value is None:
+            writer._put(FIRST_COL + 2, "not computed", note_f)
+        else:
+            writer._put(FIRST_COL + 2, value, ctrl_f, fmt)
+        writer.row += 1
+
+    writer._put(FIRST_COL, "Status", ctrl_f)
+    writer._put(FIRST_COL + 2, table.status, ctrl_f,
+                fill=None if table.status == OK else ctrl_fill)
+    writer.row += 1
+
+    if table.status == OK:
+        writer._line("Premium and exposure have moved together within the declared band.")
+    elif table.status == NO_BASIS:
+        writer._line("One side is missing, so no rate movement can be read.")
+    else:
+        rate = table.implied_rate_change
+        direction = "fallen" if rate < 0 else "risen"
+        writer._line(
+            f"Premium per unit of exposure has {direction} {abs(rate):.1%}. Not an error "
+            "— but worth holding against the cedent's own rate change in 09 before the "
+            "renewal is priced."
+        )
+    _widen(ws)
+    return writer.formula_values

@@ -6,9 +6,9 @@ Excel, driven by metadata declared in the workbook itself.
 | | |
 |---|---|
 | **Version** | 1 |
-| **Status** | `00`–`05` implemented, per-risk and cat sections; `06`–`10` outstanding |
+| **Status** | `00`–`07` implemented, per-risk and cat sections; `08`–`10` outstanding |
 | **Cadence** | Once per treaty, per year |
-| **Reference workbooks** | `Intake_v1.xlsx` · `Intake_Engineering_v1.xlsx` · `Intake_EngineeringCombined_v1.xlsx` · `Intake_FireCat_v1.xlsx` · `Intake_FireEQWind_v1.xlsx` |
+| **Reference workbooks** | `Intake_v1.xlsx` · `Intake_Engineering_v1.xlsx` · `Intake_EngineeringCombined_v1.xlsx` · `Intake_FireCat_v1.xlsx` · `Intake_FireEQWind_v1.xlsx` · `Intake_Mexico_v1.xlsx` |
 
 ---
 
@@ -228,6 +228,108 @@ same block mechanism serves that too: `Intake_FireCat_v1.xlsx` puts all three on
 sheet as `Section_1..3`, `Intake_FireEQWind_v1.xlsx` gives each its own sheet, and the two
 are verified to produce identical profiles.
 
+### 2.5 Sheets 06 and 07 — the cat aggregates
+
+Where `05` cuts the portfolio by risk size, `06` and `07` cut it by **geography**: the
+sum insured sitting in each cat zone, which is what a catastrophe model is fed and what a
+cat treaty is rated on. `06` carries the earthquake zoning, `07` the windstorm zoning.
+The two are the same dataset with different catalogues, and the code treats them so.
+
+| Field | Type | |
+|---|---|---|
+| `Zone` | text | the zone code, verbatim — `13a`, not `13.1` |
+| `Res Building` `Res Content` `Res BI` | number | residential |
+| `Com Building` `Com Content` `Com BI` | number | commercial |
+| `Ind Building` `Ind Content` `Ind BI` | number | industrial |
+| `Total` | number | **optional** — see below |
+
+Eleven headers, which is why the register in `00` no longer stops at ten (§3.1).
+
+**The zone is text.** `13a` and `14c` are not numbers, and `13` is not a Mexican
+earthquake zone at all — it exists only as `13a` and `13b`. Sorting is natural
+alphanumeric (§9.2 S12), which puts `2` before `10` and `13b` before `14a` without anyone
+declaring a rank.
+
+#### `⟦ZONES⟧` — the catalogue is declared, not inferred
+
+Sheet `00` carries a `⟦ZONES⟧` block: one row per scheme, holding the complete zoning.
+
+```
+Mexico EQ     1, 2, 3, …, 12, 13a, 13b, 14a, 14b, 14c, 14d, 15, …, 48     (52 zones)
+Mexico Wind   1, 2, 3, …, 42                                              (42 zones)
+```
+
+A block says which catalogue it is on through the `Zone scheme` attribute. A scheme the
+block names but `⟦ZONES⟧` does not list is **fatal** — the tool will not invent a zoning.
+
+**Absent zones are written as 0.** A cedent lists only the zones it has exposure in, so
+a 52-zone scheme typically arrives with nine rows. Step 2 completes the list, and the
+completion is reported: *"43 declared zone(s) with no entry in the source, shown as 0"*.
+This is value-preserving — the control sum is unchanged — and it is the point of the
+exercise: an absent row reads as *no data*, a zero reads as *nothing there*, and only the
+second is a statement about the portfolio. Step 1 is untouched; it shows the nine rows
+the cedent sent, because step 1 carries only what the sheet says (S11).
+
+#### `Total` — derived or checked, never corrected
+
+Where the cedent supplies a total column it is **checked** against the nine buckets and
+the verdict recorded; where the cedent supplies none it is **derived** as their sum and
+labelled value-adding. A total that disagrees with its parts is reported and left alone
+(S19) — the tool does not know which of the ten figures is the wrong one, and correcting
+a source figure would break the audit baseline (§1).
+
+#### What the numbers actually mean
+
+An aggregate is a single number carrying a great many decisions, and two cedents' figures
+are not comparable until those decisions are known. None can be read off the numbers, so
+each is a declared attribute, and an undeclared one ranks `Open` (§5.3):
+
+| Attribute | | |
+|---|---|---|
+| `Coinsurance` | `deducted` · `not deducted` | whether the co-insurer's share is already out |
+| `Deductible` | `deducted` · `not deducted` | policy deductibles netted off, or gross |
+| `Standard deductible` | e.g. `2%` EQ, `1.5%` hurricane | the market convention this book is written on |
+| `Limit basis` | `full sum insured` · `per risk limit` · `per location limit` | whether a limit has already capped the figure |
+| `Multi-location` | `split by location` · `allocated to main zone` · `duplicated in each zone` | a policy covering sites in several zones |
+| `Includes fac` | `yes` · `no` | as in `05` |
+| `Share basis` | `100%` · `ceded only` | as everywhere |
+| `Exposure basis` | `Sum Insured` · `EML` · `PML` · `MPL` | as in `05` |
+
+`Multi-location` is the one that can double-count: *duplicated in each zone* means the
+column totals exceed the portfolio, which is defensible for zone-level modelling and
+indefensible as a portfolio figure. It has to be visible.
+
+#### `⟦SPLITS⟧` — declared, currently empty
+
+Cedents often send fewer than nine buckets — a single figure per zone, or building and
+content without BI, or no occupancy split at all. The ratios that expand what arrived
+into the nine belong in a `⟦SPLITS⟧` block in `00`, keyed by scheme and occupancy. The
+block exists and is **deliberately empty**: a split is an assumption, and an assumption
+belongs where a reviewer can see it and where it is versioned with the pack, not inside
+the code. Until it is filled, a block sending fewer buckets carries what it sent.
+
+#### Three versions, one sheet
+
+A cedent sends the same aggregate three times, and the set is fixed:
+
+| `Period` | `As at` | |
+|---|---|---|
+| `{N} 9 months` | 30.09.N | the nine-month estimate of the expiring year |
+| `{N+1} at inception` | 01.01.N+1 | projection for the first day of the renewal year |
+| `{N+1} at expiry` | 31.12.N+1 | projection for its last day |
+
+They sit on **one sheet as three stacked blocks** sharing a selector column, which §6.5
+already recognises without anyone declaring the arrangement. `at inception` and `at
+expiry` are added to `⟦PERIOD ORDER⟧` at ranks 4 and 5, so the three sort chronologically
+rather than alphabetically.
+
+No single version is interesting. The movement between them is, and only against the
+premium movement — which is §10.4.
+
+**No rule compares `06` with `07`.** Either peril can be bought alone or both together,
+and the covered books need not be the same, so a comparison between them would fail on
+perfectly ordinary submissions.
+
 ---
 
 ## 3 · Sheet 00 — the nomenclature
@@ -241,12 +343,17 @@ prepares a data sheet which names to write. It does not declare sheets required.
 - **One row per dataset.**
 - Column **B** — the exact sheet name.
 - Column **C** — a short key, used in block IDs and log entries.
-- Columns **D … M** — the **header labels**: the minimum information to extract.
-- Columns **N** onward — the **attribute names** that sheet should declare.
-- Row **4** declares the section boundaries (`Headers` above D, `Attributes` above N).
+- Columns **D** onward — the **header labels**: the minimum information to extract.
+- After them, the **attribute names** that sheet should declare.
+- Row **4** declares where each run begins: `Headers` over the first header column,
+  `Attributes` over the first attribute column.
 
-The fixed section boundary is necessary because datasets have ragged header counts; a
-per-row boundary could not be located unambiguously.
+**The boundary is read from row 4, not fixed in the code.** Datasets have ragged header
+counts, so it cannot be found per row; but nailing it to column N would cap every pack in
+the world at ten headers, and `06` needs eleven (§2.5). So row 4 is the declaration and
+the code follows it. A sheet that carries neither label falls back to the original
+`D … M` / `N` layout, which is what every pack written before the boundary moved relies
+on — those workbooks keep reading unchanged.
 
 Names are written **plain**, with no prefixes, because humans copy them verbatim into
 their sheets. Any prefix in `00` would invite the very mismatch the vocabulary exists to
@@ -275,7 +382,7 @@ an **attribute**, not part of the field name — see §5.
 ### 3.3 The other blocks of sheet 00
 
 Sheet 00 is the **frame**: what each sheet holds, what the names mean, and what must
-tie. Beneath the dataset register it carries four more blocks, each found by its
+tie. Beneath the dataset register it carries further blocks, each found by its
 anchor rather than by position.
 
 #### `⟦GLOBAL⟧` — workbook-wide facts
@@ -286,6 +393,7 @@ anchor rather than by position.
 | `Cedent` | Example Insurance SA |
 | `Treaty` | Property per Risk XL |
 | `Loss share warning` | `20%` |
+| `Rate change warning` | `20%` |
 
 `Actual year` is **N**, the expiring year; the renewal being underwritten is **N+1**.
 Every `{N}` reference in `⟦RULES⟧` and in the step-2 figures resolves from it.
@@ -294,6 +402,10 @@ Every `{N}` reference in `⟦RULES⟧` and in the step-2 figures resolves from i
 event-driven rather than attritional — see §10.3. It sits here because it is a matter of
 underwriting judgment, not a mechanic: a different underwriter may want 15% or 30%, and
 should not need the tool changed to get it.
+
+`Rate change warning` is the same idea for §10.4: the movement in premium per unit of
+exposure beyond which the growth block raises a warning. Both default to 20% where the
+workbook declares nothing.
 
 Attributes now resolve in **three tiers**, each overriding the one above:
 
@@ -323,11 +435,37 @@ defaulted, because defaulting `Claim Reference` to a number would be silent and 
 | 1 | `est` |
 | 2 | `9 months` |
 | 3 | `re-est` |
+| 4 | `at inception` |
+| 5 | `at expiry` |
 
 Plain alphanumeric would put `2025 9 months` before `2025 est`, because `9` sorts
 before `e`. Chronologically that is backwards. This block states the intended order;
 a bare year sorts first, and a suffix nobody declared sorts last — so the ordering
 stays total whatever a pack contains. See §9.2 S13.
+
+Ranks 4 and 5 order the three versions of a cat aggregate (§2.5). A pack that carries no
+aggregates simply never uses them; a block is a declaration of what *may* appear, not of
+what must.
+
+#### `⟦ZONES⟧` — the cat zone catalogues
+
+| Scheme | Zones |
+|---|---|
+| `Mexico EQ` | `1, 2, …, 12, 13a, 13b, 14a, 14b, 14c, 14d, 15, …, 48` |
+| `Mexico Wind` | `1, 2, …, 42` |
+
+One row per zoning scheme, holding the **complete** list. A `06`/`07` block names its
+scheme through the `Zone scheme` attribute; step 2 fills every declared zone the cedent
+did not list with 0, and a scheme not listed here is fatal. See §2.5 and S18.
+
+#### `⟦SPLITS⟧` — occupancy and cover ratios
+
+| Scheme | Occupancy | Building | Content | BI |
+|---|---|---|---|---|
+
+Declared and **empty**. Where a cedent sends fewer than the nine buckets of `06`, the
+ratios that expand them belong here — visible to a reviewer and versioned with the pack,
+because a split is an assumption rather than a reading. See §2.5.
 
 #### `⟦RULES⟧` — crosschecks and interdependencies
 
@@ -728,7 +866,7 @@ back to a number, never normalised, never merged. See §9.2 S10.
 | O5 | Every block carries a machine anchor so re-runs **replace** rather than stack |
 | O6 | `20. Summary` collects **step-2 blocks only**, block by block, regenerated wholesale |
 | O7 | **Both steps or neither.** A dataset with no step-2 spec is not written at all, and the run reports an **error** |
-| O8 | The section-group loss check (§10.3) is written last, 3 blank rows below everything else on sheet `01` |
+| O8 | A group check is written last, 3 blank rows below everything else — §10.3 on sheet `01`, §10.4 on the aggregate sheet |
 
 O2 uses the last non-empty row of the whole sheet, not the last record, so that
 footnotes and totals below the data are never overwritten.
@@ -781,6 +919,8 @@ sums tying back to step 1.
 | **S15** | A dataset may declare **several** aggregate tables. Each must reach the same total as the detail, and an attribute may redirect a grouping | value-preserving |
 | **S16** | A declared field the source does not supply may be **derived in step 2** from one it does — never in step 1 | value-adding |
 | **S17** | A dataset may declare **cumulative** columns: a running share of a measure's total | value-adding |
+| **S18** | A dataset may declare its key **complete** against a catalogue in `00`. Keys the source omits are written with every measure at 0 | value-preserving |
+| **S19** | A dataset may declare a field as the **identity** of others: supplied, it is checked against them and the verdict recorded; absent, it is derived as their sum | check / value-adding |
 
 **S14.** `03. Large Losses` emits the claim detail and then, beneath it, the annual sum:
 
@@ -894,6 +1034,36 @@ range above it:
 
 A reviewer can see both the running sum and the total it is divided by, which a bare
 percentage would not show.
+
+**S18 — the zone that isn't there.** `06` and `07` declare their key complete against
+`⟦ZONES⟧` (§2.5). Step 2 writes every declared zone, and reports the ones it added:
+
+```
+· 43 declared zone(s) with no entry in the source, shown as 0: 3, 4, 5, 6, … (value-preserving)
+```
+
+It is value-preserving in the strict sense S6 requires — adding zeros cannot move a
+total, and the control sum proves it did not. What it changes is what a reader sees: a
+missing row is silence, and a zero is an answer.
+
+The catalogue lives in the workbook rather than in the code because zonings are a matter
+of the territory, not of the tool. A pack for another country declares its own `⟦ZONES⟧`
+and nothing else changes.
+
+**S19 — a total is a claim, and claims get checked.** `06` declares `Total` as the
+identity of its nine buckets. Which way that runs depends on the source:
+
+| The source gives | Step 2 does | |
+|---|---|---|
+| nine buckets and a total | checks the sum against it, per record | `Total checked against 9 part(s): all agree` |
+| nine buckets, no total | derives it as their sum | value-adding, and labelled so |
+| a disagreement | **reports it** | `Total checked against 9 part(s): 2 record(s) DISAGREE` |
+
+The third row is the one that matters. The tool does not know whether the total or one
+of the nine is wrong, so it does not touch either: it names the records and leaves the
+figures as the cedent sent them. Correcting a source figure would break the audit
+baseline (§1), and a quietly corrected total is worse than a visible contradiction —
+the contradiction is a question for the cedent, and it should reach them as one.
 
 **Bounds are never summed.** A band bound is a number but not a quantity: totalling the
 lower edges of a profile produces a figure that means nothing and would sit in the
@@ -1169,6 +1339,74 @@ one they would merely repeat the total.
 The status word is `within limits`, never `OK`: step 1 and step 2 already write an
 `OK`/`MISMATCH` control check, and one word must not mean two things on one sheet.
 
+### 10.4 Exposure growth against premium growth
+
+Like §10.3 this is a group check rather than a `⟦RULES⟧` line, because it spans three
+blocks and reaches into two other datasets. It exists because **no version of a cat
+aggregate is interesting on its own** — the movement between them is, and only against
+what the premium did over the same span.
+
+The figure the block produces is the **implied rate change**:
+
+```
+(1 + premium growth) ÷ (1 + exposure growth) − 1
+```
+
+Premium up 9% carried on 12.8% more exposure is a rate *cut* of about 3.4%, however the
+premium line reads by itself. That is the number a renewal turns on, and it is the bridge
+to `09. Rate Development`: if the cedent claims +4% and this says −3.4%, one of the two
+is wrong and the difference is worth a conversation.
+
+| Side | Where it comes from |
+|---|---|
+| Exposure, expiring | first version's `Total` summed over all zones — the `{N} 9 months` estimate |
+| Exposure, renewal | last version's `Total` summed over all zones — the `{N+1} at expiry` projection |
+| Premium, expiring | `01` `Premium`, year N |
+| Premium, renewal | `02` `EPI`, year N+1 |
+
+Premium for the renewal year comes from `02` because **`01` has no forward figure**. A
+history sheet ends at the expiring year by definition, so the EPI re-estimate is the only
+statement about N+1 there is.
+
+The exposure figures are taken from the **step-2** records, not step 1: completing the
+zone list only adds zeros and cannot move the sum, but a *derived* `Total` (S19) exists
+nowhere else.
+
+```
+EXPOSURE AND PREMIUM GROWTH — EARTHQUAKE
+Exposure is the sum of the zone totals of each version; premium is the expiring year
+from 01 and the renewal year from 02, since 01 carries no forward figure.
+Implied rate change = (1 + premium growth) ÷ (1 + exposure growth) − 1. Beyond ±20% it
+is flagged — a warning, never an error: a book may shrink or grow for good reasons.
+
+  Version             As at         Exposure   Change
+  2025 9 months       30.09.2025     162,226
+  2026 at inception   01.01.2026     172,282    +6.2%
+  2026 at expiry      31.12.2026     182,987    +6.2%
+
+  Premium, expiring year   2025          1,512
+  Premium, renewal year    2026 EPI      1,648
+
+  Exposure growth                       +12.8%
+  Premium growth                         +9.0%
+  Implied rate change                     -3.4%
+  Status                            within limits
+```
+
+**Nothing here can fail a run.** Portfolios shrink for good reasons — a cedent drops a
+segment, a currency moves, a large scheme leaves — and they grow for good reasons too. An
+earlier draft of these rules held that exposure should track premium and that a book
+should not shrink; both were wrong as stated, and neither survives. What remains is a
+threshold, `Rate change warning` in `⟦GLOBAL⟧`, beyond which the movement is **raised**
+so that the renewal is priced knowingly. Exactly as §10.3 treats an unusual loss share,
+and with the same status word, `within limits`.
+
+**One table per cat section per aggregate role**, so a treaty covering both perils gets an
+earthquake table and a hurricane table, each written at the end of its own aggregate sheet
+(§9.1 O8) rather than on `01` — it is a statement about that aggregate. Where a version
+carries no `Period`, the versions cannot be ordered and the table says `NOT EVALUATED`
+naming the blocks, rather than guessing a sequence.
+
 ---
 
 ## 11 · Logging
@@ -1225,6 +1463,12 @@ Resolved:
 | Number of claims on `04` | **Optional** — declared `(optional)` in sheet 00 |
 | Dataset with no step-2 spec | **Nothing written**, run reports an error — §9.1 O7 |
 | Loss-share threshold | **20%**, declared in `⟦GLOBAL⟧` so an underwriter can change it |
+| Rate-change threshold | **20%**, likewise — §10.4 |
+| Header register width | **Read from row 4**, not fixed at ten columns; older packs fall back to `D … M` — §3.1 |
+| `06` vs `07` | **No rule compares them.** Either peril can be bought alone, and the covered books need not match — §2.5 |
+| Zones with no exposure | **Written as 0**, from the `⟦ZONES⟧` catalogue — an absent row is silence, a zero is an answer |
+| A `Total` disagreeing with its parts | **Reported, never corrected** — §9.2.1 S19 |
+| Occupancy / cover splits | `⟦SPLITS⟧` declared and **deliberately empty** until the ratios are settled |
 
 ### 13.1 Parked — decided against for now, or awaiting a decision
 
@@ -1239,11 +1483,13 @@ cleanly in every case, and none is worth building before the decision behind it 
 
 Remaining:
 
-1. **Datasets `06`–`10`.** Header labels and attributes not yet specified.
+1. **Datasets `08`–`10`.** Header labels and attributes not yet specified.
 2. **Sheet `08`'s measures.** Both split axes are settled (§2.1); what is counted at each
    intersection — risk count, sum insured, premium — is not.
 3. **Sheet `20. Summary`.** Specified in §9.1 O6 but not yet implemented; it needs at
    least two datasets to be meaningful.
+4. **`⟦SPLITS⟧` ratios.** The block exists (§2.5); what goes in it — per scheme and
+   occupancy — is an underwriting decision still to be taken.
 
 ---
 
@@ -1295,7 +1541,8 @@ the run fails rather than reporting a plausible wrong number.
 
 ### 14.2 The reference workbooks
 
-Five treaty shapes, generated by `tools/build_v1.py` and `tools/build_intake.py`:
+Six treaty shapes, generated by `tools/build_v1.py`, `tools/build_intake.py` and
+`tools/build_mexico.py`:
 
 | Workbook | Sections | Demonstrates |
 |---|---|---|
@@ -1304,9 +1551,11 @@ Five treaty shapes, generated by `tools/build_v1.py` and `tools/build_intake.py`
 | `Intake_EngineeringCombined_v1.xlsx` | Engineering | the same treaty with **both loss datasets in one list** — §6.5 |
 | `Intake_FireCat_v1.xlsx` | Fire, Earthquake, Windstorm | the two cat sections **share one sheet** |
 | `Intake_FireEQWind_v1.xlsx` | Fire, Earthquake, Windstorm | **a sheet per section** |
+| `Intake_Mexico_v1.xlsx` | Earthquake, Hurricane | the **cat aggregates** — eleven headers, `⟦ZONES⟧`, three versions per sheet, §10.4 |
 
-The last two carry identical figures and are verified to produce identical
-crosschecks — the test that a section really is just a block.
+`Intake_FireCat_v1.xlsx` and `Intake_FireEQWind_v1.xlsx` carry identical figures and are
+verified to produce identical crosschecks — the test that a section really is just a
+block.
 
 Their `04` blocks are built to exercise S15 rather than to look tidy:
 
@@ -1339,6 +1588,17 @@ The six records are the full years 2021–2025 plus `2025 9 months`, so the refe
 workbook exercises S10: two records share the year 2025, the overlap hypothesis is
 raised, and the control sum counts that year twice — deliberately, since it verifies
 extraction and not business meaning.
+
+`Intake_Mexico_v1.xlsx` is built to exercise §2.5 and §10.4 rather than to look like a
+full submission — it carries `01`, `02`, `06` and `07` and nothing else:
+
+| | |
+|---|---|
+| `06. EQ Aggs` | 11 headers, **three stacked versions** on one sheet, 9 of 52 zones listed |
+| `07. Wind Aggs` | the same shape on a 42-zone scheme with no sub-zones |
+| `⟦ZONES⟧` | both catalogues, so the zero-fill has something to fill against |
+| Zones present | `1`, `2`, `13a`, `13b`, `14a`, `14c`, `22`, … — deliberately **not** contiguous, so the natural sort is tested on the sub-zones |
+| `01` / `02` | one section each, carrying only what §10.4 reads: `Premium` for N and `EPI` for N+1 |
 
 A note on the sandbox this was built in: LibreOffice was unavailable, so formula results
 are cached by `recalc.py` writing `<v>` alongside `<f>` directly. Where LibreOffice or

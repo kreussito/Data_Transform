@@ -20,6 +20,7 @@ VOCAB_ANCHOR = "⟦VOCABULARY⟧"
 RULES_ANCHOR = "⟦RULES⟧"
 PERIOD_ANCHOR = "⟦PERIOD ORDER⟧"
 SECTIONS_ANCHOR = "⟦SECTIONS⟧"
+ZONES_ANCHOR = "⟦ZONES⟧"
 
 
 def norm(value) -> str:
@@ -99,7 +100,7 @@ class Nomenclature:
     """Sheet 00: the frame — datasets, globals, types, vocabulary and rules."""
 
     def __init__(self, datasets, vocabulary, globals_=None, types=None,
-                 rules=None, period_order=None, sections=None):
+                 rules=None, period_order=None, sections=None, zones=None):
         self.datasets = datasets
         self.vocabulary = vocabulary
         self.globals = globals_ or {}
@@ -107,6 +108,20 @@ class Nomenclature:
         self.rules = rules or []
         self.period_order = period_order or {}
         self.sections = sections or []
+        self.zones = zones or {}
+
+    def zones_for(self, scheme: str) -> list[str]:
+        """Every zone of a scheme, in declared order — spec §2.5.
+
+        A cat aggregate lists only the zones the cedent has exposure in. The zones with
+        none are the ones worth seeing: absent reads as "no data", zero reads as "nothing
+        there", and only one of those is true. So the full list is declared.
+        """
+        wanted = norm(scheme).casefold()
+        for name, codes in self.zones.items():
+            if norm(name).casefold() == wanted:
+                return list(codes)
+        return []
 
     @property
     def actual_year(self) -> int | None:
@@ -133,8 +148,34 @@ class Nomenclature:
     def field_types(self, headers) -> dict[str, FieldType]:
         return {h: self.type_of(h) for h in headers}
 
+    @staticmethod
+    def register_columns(ws) -> tuple[int, int, int]:
+        """Where the headers end and the attributes begin — read from row 4, spec §3.1.
+
+        Row 4 has always *said* where the boundary is (``Headers →`` above D,
+        ``Attributes →`` above N); the code used to hard-code it, which capped every
+        dataset at ten headers. ``06. EQ Aggs`` needs eleven — a zone and the nine
+        occupancy × cover buckets and a total — so the label is now what decides, and
+        widening the register is a matter of moving it.
+
+        A sheet that declares neither label keeps the original layout, so workbooks
+        written before this change still read correctly.
+        """
+        first, attrs = None, None
+        for col in range(2, ATTR_COL_LAST + 1):
+            text = norm(ws.cell(row=SECTION_ROW, column=col).value).casefold()
+            if first is None and text.startswith("header"):
+                first = col
+            elif text.startswith("attribute"):
+                attrs = col
+                break
+        first = first or HEADER_COL_FIRST
+        attrs = attrs or ATTR_COL_FIRST
+        return first, attrs - 1, attrs
+
     @classmethod
     def read(cls, ws) -> "Nomenclature":
+        header_first, header_last, attr_first = cls.register_columns(ws)
         datasets: dict[str, Dataset] = {}
         for row in range(FIRST_DATASET_ROW, ws.max_row + 1):
             sheet_name = norm(ws.cell(row=row, column=2).value)
@@ -146,7 +187,7 @@ class Nomenclature:
             declared = [
                 h for h in (
                     norm(ws.cell(row=row, column=c).value)
-                    for c in range(HEADER_COL_FIRST, HEADER_COL_LAST + 1)
+                    for c in range(header_first, header_last + 1)
                 ) if h
             ]
             headers, optional = [], []
@@ -160,7 +201,7 @@ class Nomenclature:
             attributes = tuple(
                 a for a in (
                     norm(ws.cell(row=row, column=c).value)
-                    for c in range(ATTR_COL_FIRST, ATTR_COL_LAST + 1)
+                    for c in range(attr_first, ATTR_COL_LAST + 1)
                 ) if a
             )
             if not headers:
@@ -176,7 +217,21 @@ class Nomenclature:
             cls._read_rules(ws),
             cls._read_period_order(ws),
             cls._read_sections(ws),
+            cls._read_zones(ws),
         )
+
+    @staticmethod
+    def _read_zones(ws) -> dict[str, list[str]]:
+        """⟦ZONES⟧ — the complete zone list of each scheme — spec §2.5."""
+        out = {}
+        for row, (scheme, codes) in _read_block(ws, ZONES_ANCHOR, 2):
+            listed = [c.strip() for c in codes.replace(";", ",").split(",") if c.strip()]
+            if not listed:
+                raise ExtractionError(
+                    f"sheet 00 ⟦ZONES⟧ row {row}: scheme {scheme!r} lists no zones"
+                )
+            out[scheme] = listed
+        return out
 
     @staticmethod
     def _read_globals(ws) -> dict[str, str]:
