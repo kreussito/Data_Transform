@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "datatransform"
+version = "0.1.0"
+description = "Extract, filter and transform reinsurance treaty submission data from Excel, driven by metadata declared in the workbook itself"
+readme = "README.md"
+requires-python = ">=3.10"
+
+# openpyxl is the only runtime dependency. Everything else the tool uses — zipfile,
+# xml.etree, dataclasses, logging, hashlib — is in the standard library, which is why
+# moving this to another machine is a clone and one install.
+dependencies = ["openpyxl>=3.1"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.5"]
+
+[project.scripts]
+datatransform = "datatransform.__main__:main"
+
+[tool.setuptools]
+packages = ["datatransform"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 95
