@@ -48,6 +48,20 @@ class Step2Result:
     figures: list[Figure] = field(default_factory=list)
     aggregates: list[AggregateTable] = field(default_factory=list)
     derived_fields: tuple[str, ...] = ()     # declared fields step 2 read off a label
+    assumed_fields: tuple[str, ...] = ()     # fields resting on a declared ratio — §2.6
+
+    @property
+    def confidence(self) -> Confidence:
+        """Step 1's confidence, but never better than the ratios it was expanded with.
+
+        A block extracted cleanly is ``Confirmed``. If three of its five columns exist
+        only because a declared split was multiplied onto a reported figure, the block as
+        a whole is no longer a reading, and saying so is the entire point of carrying
+        confidence at all — spec §5.3.
+        """
+        if not self.assumed_fields:
+            return self.block.confidence
+        return Confidence.worst((self.block.confidence, Confidence.ASSUMED))
 
     @property
     def declared_columns(self) -> tuple[str, ...]:
@@ -184,7 +198,173 @@ def _derive_bounds(block: Block, spec: Step2Spec):
     return records, derived, continuity(pairs)
 
 
-def _complete(block: Block, spec: Step2Spec, records, nomenclature):
+@dataclass
+class _AxisPlan:
+    """How one split axis is going to be satisfied — spec §2.6.
+
+    ``labels`` are the names the block actually uses along this axis, or ``None`` where
+    the block is silent about it. ``mapping`` takes each declared category to the label
+    it comes from and the factor to apply — which makes the three cases one shape:
+
+    ============ ================================ ==========
+    reported     ``Res → ("Res", 1.0)``           factor 1
+    merged       ``Ind → ("Commercial", 0.25)``   re-split
+    declared     ``Ind → (None, 0.20)``           multiplied on
+    ============ ================================ ==========
+    """
+
+    axis: object
+    kind: str                                     # reported | merged | declared
+    labels: tuple[str, ...] | None
+    mapping: dict[str, tuple[str | None, float]]
+    source: str = ""
+
+    @property
+    def score(self) -> int:
+        return {"reported": 2, "merged": 1, "declared": 0}[self.kind]
+
+
+def _check_shares(rules, where: str) -> None:
+    """Ratios that do not close are a typo, not a judgement — so they are fatal."""
+    total = sum(r.share for r in rules)
+    if abs(total - 1.0) > 0.005:
+        raise ExtractionError(
+            f"sheet 00 ⟦SPLITS⟧ {where}: the shares sum to {total:.1%}, not 100% — "
+            "a split may redistribute a figure but never change it"
+        )
+
+
+def _axis_options(axis, dataset_key: str, nomenclature) -> list[_AxisPlan]:
+    """Every way this axis could be satisfied, best first — spec §2.6."""
+    out = [_AxisPlan(axis, "reported", tuple(axis.categories),
+                     {c: (c, 1.0) for c in axis.categories})]
+
+    # Merged: a label covering several categories, e.g. "Commercial" for Com and Ind.
+    merged: dict[str, list] = {}
+    for rule in nomenclature.splits:
+        if (rule.applies_to(dataset_key) and rule.source_category
+                and norm(rule.axis).casefold() == norm(axis.name).casefold()
+                and rule.category in axis.categories):
+            merged.setdefault(rule.source_category, []).append(rule)
+    if merged:
+        mapping, labels, sources = {}, [], []
+        for category in axis.categories:
+            hit = next(((label, r) for label, rules in merged.items()
+                        for r in rules if r.category == category), None)
+            label, share = (hit[0], hit[1].share) if hit else (category, 1.0)
+            if hit and hit[1].source:
+                sources.append(hit[1].source)
+            mapping[category] = (label, share)
+            if label not in labels:
+                labels.append(label)
+        for label, rules in merged.items():
+            _check_shares(rules, f"{label!r} on axis {axis.name!r}")
+        out.append(_AxisPlan(axis, "merged", tuple(labels), mapping,
+                             "; ".join(dict.fromkeys(sources))))
+
+    # Declared: the block never mentions this axis, so the whole of it is multiplied on.
+    rules = nomenclature.splits_for(dataset_key, axis.name)
+    if rules:
+        _check_shares(rules, f"axis {axis.name!r} of {dataset_key!r}")
+        by_category = {r.category: r for r in rules}
+        if all(c in by_category for c in axis.categories):
+            out.append(_AxisPlan(
+                axis, "declared", None,
+                {c: (None, by_category[c].share) for c in axis.categories},
+                "; ".join(dict.fromkeys(r.source for r in rules if r.source)),
+            ))
+    return out
+
+
+def _base_field(labels: list[str], total: str) -> str:
+    """The field a target bucket is computed from — the reported axes only."""
+    return " ".join(labels) if labels else total
+
+
+def _split(block: Block, spec: Step2Spec, records, nomenclature):
+    """Expand what arrived into the dataset's full bucket set — spec §2.6, S20.
+
+    A split redistributes; it never creates. Every reported figure comes out untouched
+    and the record total is unchanged, so this is value-preserving in sum even though it
+    is plainly value-adding in detail.
+    """
+    rule = spec.split
+    if rule is None or nomenclature is None:
+        return records, (), [], False, ()
+
+    axes = nomenclature.axes_for(block.dataset.key)
+    buckets = nomenclature.buckets_for(block.dataset.key)
+    if not axes or not buckets:
+        return records, (), [], False, ()
+    if all(b in block.fields for b in buckets):
+        return records, (), [], False, ()           # the finished grid arrived
+
+    from itertools import product as _product
+
+    options = [_axis_options(a, block.dataset.key, nomenclature) for a in axes]
+    chosen = None
+    for combination in _product(*options):
+        labels = [p.labels for p in combination if p.labels is not None]
+        needed = ([" ".join(parts) for parts in _product(*labels)] if labels
+                  else [rule.total])
+        if not all(f in block.fields for f in needed):
+            continue
+        if chosen is None or sum(p.score for p in combination) > sum(p.score
+                                                                    for p in chosen):
+            chosen = combination
+
+    if chosen is None:
+        missing = [a.name for a in axes]
+        raise ExtractionError(
+            f"{block.sheet_name!r} block {block.index}: the source reports neither the "
+            f"{len(buckets)} buckets nor a level they can be built from. Axes "
+            f"{', '.join(missing)}; sheet 00 ⟦SPLITS⟧ declares no ratio that closes the "
+            "gap, and the tool will not invent one"
+        )
+
+    from_total = all(p.labels is None for p in chosen)
+    out = []
+    for record in records:
+        values = dict(record.values)
+        for categories in _product(*(p.axis.categories for p in chosen)):
+            labels, factor = [], 1.0
+            for plan, category in zip(chosen, categories):
+                label, share = plan.mapping[category]
+                if label is not None:
+                    labels.append(label)
+                factor *= share
+            base = values.get(_base_field(labels, rule.total))
+            values[" ".join(categories)] = (
+                base * factor if isinstance(base, (int, float)) else None
+            )
+        out.append(Record(record.source_ref, values, record.confidence))
+
+    notes = []
+    for plan in chosen:
+        if plan.kind == "reported":
+            continue
+        shares = ", ".join(f"{c} {plan.mapping[c][1]:.0%}" for c in plan.axis.categories)
+        origin = f" [{plan.source}]" if plan.source else ""
+        notes.append(
+            f"{plan.axis.name} not reported at this level, applied from sheet 00 "
+            f"⟦SPLITS⟧{origin}: {shares} (value-adding — an assumption, not a reading)"
+            if plan.kind == "declared" else
+            f"{plan.axis.name} arrived merged, re-split per sheet 00 ⟦SPLITS⟧{origin}: "
+            f"{shares} (value-adding)"
+        )
+    reported = [p.axis.name for p in chosen if p.kind == "reported"]
+    notes.append(
+        f"{len(buckets)} bucket(s) built from "
+        + (f"the reported {' and '.join(reported)} figures" if reported
+           else f"{rule.total} alone")
+        + " — the split redistributes and leaves every record total unchanged"
+    )
+    created = tuple(b for b in buckets if b not in block.fields)
+    assumed = created if any(p.kind != "reported" for p in chosen) else ()
+    return out, created, notes, from_total, assumed
+
+
+def _complete(block: Block, spec: Step2Spec, records, nomenclature, extra=()):
     """Add the catalogue members the source is silent about, with 0 — spec §9.2.1 S18.
 
     A cat aggregate lists the zones the cedent has exposure in. The zones with none are
@@ -212,27 +392,45 @@ def _complete(block: Block, spec: Step2Spec, records, nomenclature):
         if norm(member) in present:
             continue
         values = {rule.key: member}
-        values.update({m: 0.0 for m in block.measure_fields})
+        values.update({m: 0.0 for m in (*block.measure_fields, *extra)})
         records.append(Record("—", values))
         filled.append(member)
     return records, filled
 
 
-def _identity(block: Block, spec: Step2Spec, records):
+def _identity(block: Block, spec: Step2Spec, records, nomenclature=None,
+              from_total: bool = False):
     """Reconcile a declared total against its parts — spec §9.2.1 S19.
 
     Derived where the source omits it, checked where the source supplies it, and left
     alone where the parts are missing — the same three shapes as the band bounds.
+
+    ``from_total`` says the parts were themselves computed *from* the total by the split.
+    Then the sum agrees by construction and there is nothing to check, so the block says
+    that rather than reporting a passed test it could never have failed.
     """
     rule = spec.identity
     if rule is None:
         return records, (), None
 
-    parts = [p for p in rule.parts if p in block.fields]
+    declared = rule.parts or (
+        nomenclature.buckets_for(block.dataset.key) if nomenclature else ()
+    )
+    if not declared:
+        return records, (), None
+
+    known = set(block.fields) | set(records[0].values) if records else set(block.fields)
+    parts = [p for p in declared if p in known]
     if not parts:
         return records, (), (
             f"{rule.total} stands alone: the source declares none of "
-            f"{rule.parts[0]} … {rule.parts[-1]}, so the split cannot be reconciled"
+            f"{declared[0]} … {declared[-1]}, so the split cannot be reconciled"
+        )
+
+    if from_total:
+        return records, (), (
+            f"{rule.total} was the source of the {len(parts)} part(s), so they sum back "
+            "to it by construction — nothing here is a check"
         )
 
     if rule.total in block.fields:
@@ -397,9 +595,14 @@ def apply_step2(block: Block, spec: Step2Spec, nomenclature=None, blocks=None) -
 
     # Bounds first: the sort depends on them, and they may have to be read off the label.
     source, bound_fields, gaps = _derive_bounds(block, spec)
-    source, total_field, identity_note = _identity(block, spec, source)
-    derived_fields = bound_fields + total_field
-    source, filled = _complete(block, spec, source, nomenclature)
+    # The split comes first: the identity has nothing to reconcile until the buckets
+    # exist, and a zone added as 0 splits to zeros whichever way round it is done.
+    source, split_fields, split_notes, from_total, assumed = _split(
+        block, spec, source, nomenclature)
+    source, total_field, identity_note = _identity(block, spec, source,
+                                                   nomenclature, from_total)
+    derived_fields = bound_fields + split_fields + total_field
+    source, filled = _complete(block, spec, source, nomenclature, split_fields)
 
     records = sorted(source,
                      key=lambda r: _sort_key(r, spec.sort_by, order, spec.numeric_sort),
@@ -449,6 +652,7 @@ def apply_step2(block: Block, spec: Step2Spec, nomenclature=None, blocks=None) -
 
     available = set(block.fields) | set(derived_fields)
     shown_columns = [h for h in block.dataset.headers if h in available]
+    notes.extend(split_notes)
     if identity_note:
         notes.append(identity_note)
     if filled:
@@ -485,7 +689,7 @@ def apply_step2(block: Block, spec: Step2Spec, nomenclature=None, blocks=None) -
     result = Step2Result(
         block=block, spec=spec, records=records, computed=computed, notes=notes,
         figures=_derived_figures(block, spec, actual_year), aggregates=aggregates,
-        derived_fields=derived_fields,
+        derived_fields=derived_fields, assumed_fields=assumed,
     )
     if gaps:
         block.hypotheses.append(

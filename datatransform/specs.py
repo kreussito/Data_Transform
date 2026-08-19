@@ -117,10 +117,28 @@ class Identity:
     * both sides supplied — **checked**, and a disagreement is a finding
     * the total absent — **derived**, and said so
     * the parts absent — the total stands alone, and the gap is named
+
+    ``parts`` empty means *the dataset's buckets*, taken from ⟦AXES⟧ — so a dataset whose
+    axes change does not need its identity restated.
     """
 
     total: str
-    parts: tuple[str, ...]
+    parts: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Split:
+    """Expand what arrived into the dataset's full bucket set — spec §2.6, S20.
+
+    The buckets are the product of the declared axes. A cedent reports at whatever level
+    it keeps its book: the whole total, one axis, or the finished grid. Step 2 multiplies
+    the missing axes onto what came, using ratios that are themselves declared and
+    sourced.
+
+    ``total`` names the field to start from when nothing but a grand figure arrived.
+    """
+
+    total: str = "Total"
 
 
 @dataclass(frozen=True)
@@ -142,6 +160,7 @@ class Step2Spec:
     numeric_sort: bool = False       # sort on the number, not the label
     complete: Complete | None = None
     identity: Identity | None = None
+    split: Split | None = None
 
 
 STEP2: dict[str, Step2Spec] = {
@@ -239,12 +258,10 @@ STEP2: dict[str, Step2Spec] = {
     "06 EQ Aggs": Step2Spec(
         sort_by=("Zone",),
         ascending=True,
+        split=Split(total="Total"),
         complete=Complete(key="Zone", catalogue_attribute="Zone scheme"),
-        identity=Identity(total="Total", parts=(
-        "Res Building", "Res Content", "Res BI",
-        "Com Building", "Com Content", "Com BI",
-        "Ind Building", "Ind Content", "Ind BI",
-        )),
+        # The parts are the buckets from ⟦AXES⟧: nine for earthquake, three for wind.
+        identity=Identity(total="Total"),
         cumulative=(Cumulative("Cumulative exposure %", "Total"),),
     ),
     "03 Large": Step2Spec(

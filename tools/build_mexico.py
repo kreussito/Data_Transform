@@ -54,10 +54,36 @@ EQ_ZONES = ([str(z) for z in range(1, 13)]
             + [str(z) for z in range(15, 49)])
 WIND_ZONES = [str(z) for z in range(1, 43)]
 
-BUCKETS = ["Res Building", "Res Content", "Res BI",
-           "Com Building", "Com Content", "Com BI",
-           "Ind Building", "Ind Content", "Ind BI"]
-HEADERS_06 = ["Zone"] + BUCKETS + ["Total (optional)"]
+OCCUPANCY = ["Res", "Com", "Ind"]
+COVER = ["Building", "Content", "BI"]
+
+# The buckets are the product of the axes — spec §2.6. Earthquake declares both, so it
+# has nine; windstorm declares occupancy alone, so it has three.
+BUCKETS = [f"{o} {c}" for o in OCCUPANCY for c in COVER]
+
+# Every bucket is optional in the *source*: step 2 builds the ones the cedent reports at
+# a coarser level from ⟦SPLITS⟧, so requiring them here would refuse a perfectly ordinary
+# submission. What is not optional is that some level arrives — a block carrying neither
+# the buckets nor a figure they can be built from is refused by the split itself.
+HEADERS_06 = ["Zone"] + [f"{b} (optional)" for b in BUCKETS] + ["Total (optional)"]
+HEADERS_07 = ["Zone"] + [f"{o} (optional)" for o in OCCUPANCY] + ["Total (optional)"]
+
+AXES = [
+    ("06 EQ Aggs", "Occupancy", OCCUPANCY),
+    ("06 EQ Aggs", "Cover", COVER),
+    ("07 Wind Aggs", "Occupancy", OCCUPANCY),
+]
+
+# The cedent reports its hurricane aggregate as one figure per zone and gives the
+# occupancy split for the book as a whole; the 75/25 rule is ours, not theirs, and is
+# marked as such wherever it is applied.
+SPLITS = [
+    ("07 Wind Aggs", "Occupancy", "", "Res", 0.38, "Cedent book split, 30.09.2025"),
+    ("07 Wind Aggs", "Occupancy", "", "Com", 0.42, "Cedent book split, 30.09.2025"),
+    ("07 Wind Aggs", "Occupancy", "", "Ind", 0.20, "Cedent book split, 30.09.2025"),
+    ("*", "Occupancy", "Commercial", "Com", 0.75, "House convention"),
+    ("*", "Occupancy", "Commercial", "Ind", 0.25, "House convention"),
+]
 
 ATTRS_06 = ["Section", "Currency", "Scale", "Share basis", "Exposure basis",
             "Zone scheme", "Coinsurance", "Deductible", "Standard deductible",
@@ -72,7 +98,7 @@ ATTRS_02 = ["Section", "Currency", "Scale", "Share basis", "Year basis",
 
 TYPES = [("Year", "text"), ("Premium", "number"), ("Incurred Losses", "number"),
          ("EPI", "number"), ("Zone", "text"), ("Total", "number")] + \
-        [(b, "number") for b in BUCKETS]
+        [(b, "number") for b in BUCKETS] + [(o, "number") for o in OCCUPANCY]
 
 VOCABULARY = [
     ("Year basis", "UW | Occurrence"),
@@ -180,15 +206,20 @@ def _check_catalogue(base, zones, name):
                          f"or out of catalogue order")
 
 
-def _rows(base, version):
+def _rows(base, version, detail=True):
+    """``detail`` distinguishes the two cedents: one sends the nine buckets, the other
+    a single figure per zone and the book split separately."""
     factor = GROWTH[version]
     out = []
     for zone, size, mix in base:
         scaled = [round(size * share * factor) for share in MIX[mix]]
         row = {"B": zone}
-        for i, value in enumerate(scaled):
-            row[chr(ord("C") + i)] = value
-        row["L"] = sum(scaled)                       # the cedent supplies the total
+        if detail:
+            for i, value in enumerate(scaled):
+                row[chr(ord("C") + i)] = value
+            row["L"] = sum(scaled)                   # the cedent supplies the total
+        else:
+            row["C"] = sum(scaled)
         out.append(row)
     return out
 
@@ -213,7 +244,7 @@ def build_sheet00(wb):
         ("02. EPI EQ", "02 EPI EQ", HEADERS_02, ATTRS_02),
         ("02. EPI Wind", "02 EPI Wind", HEADERS_02, ATTRS_02),
         ("06. EQ Aggs", "06 EQ Aggs", HEADERS_06, ATTRS_06),
-        ("07. Wind Aggs", "07 Wind Aggs", HEADERS_06, ATTRS_06),
+        ("07. Wind Aggs", "07 Wind Aggs", HEADERS_07, ATTRS_06),
     ]
     row = 5
     for sheet_name, key, headers, attrs in datasets:
@@ -282,12 +313,32 @@ def build_sheet00(wb):
         "'at inception' and 'at expiry' order the three versions of an aggregate: the "
         "nine-month estimate of N, then the first and the last day of N+1.", sub_f)
 
-    r = block_header(ws, r + 3, "⟦SPLITS⟧",
-                     ["Scheme", "Occupancy", "Building", "Content", "BI"])
+    r = block_header(ws, r + 3, "⟦AXES⟧", ["Dataset", "Axis", "Categories"])
+    for dataset, axis, categories in AXES:
+        put(ws, f"B{r}", dataset, body_f)
+        put(ws, f"C{r}", axis, body_f, blue)
+        put(ws, f"D{r}", ", ".join(categories), body_f)
+        r += 1
     put(ws, f"B{r + 1}",
-        "Empty by design. Where a cedent sends fewer buckets than the nine, the ratios "
-        "that fill the rest go here — declared, visible and versioned with the pack, "
-        "because a split is an assumption and not a reading.", sub_f)
+        "The buckets of a dataset are the product of its axes: earthquake is occupancy "
+        "× cover and has nine, hurricane declares occupancy alone and has three.", sub_f)
+
+    r = block_header(ws, r + 3, "⟦SPLITS⟧",
+                     ["Dataset", "Axis", "From", "Category", "Share", "Source"])
+    for dataset, axis, frm, category, share, origin in SPLITS:
+        put(ws, f"B{r}", dataset, body_f)
+        put(ws, f"C{r}", axis, body_f, blue)
+        put(ws, f"D{r}", frm, body_f)
+        put(ws, f"E{r}", category, body_f)
+        put(ws, f"F{r}", share, body_f, yellow, fmt="0%")
+        put(ws, f"G{r}", origin, body_f)
+        r += 1
+    put(ws, f"B{r + 1}",
+        "Ratios applied where the cedent reports at a coarser level. A blank 'From' "
+        "distributes a whole axis; a filled one re-splits a category that arrived "
+        "merged. 'Source' is not decoration — a ratio from the cedent's own prior "
+        "submission and one borrowed from another book are both assumptions, but not "
+        "equally good ones.", sub_f)
 
     widths(ws, {"A": 3, "B": 24, "C": 46, "D": 15})
     for col in "EFGHIJKLMNOP":
@@ -298,12 +349,16 @@ def build_sheet00(wb):
 
 
 # ══════════════════════════════════════════════════════════════ aggregate sheet
-def aggregate_sheet(wb, name, *, title, section, scheme, base, deductible):
+def aggregate_sheet(wb, name, *, title, section, scheme, base, deductible, detail=True):
     """Three versions of one zone aggregate, stacked and sharing a selector column."""
     ws = wb.create_sheet(name)
     put(ws, "B1", title, title_f)
     put(ws, "B2", "Three versions of the same zoning. The movement between them is the "
                   "point — see the growth block written beneath.", sub_f)
+    if not detail:
+        put(ws, "B2", "Three versions, reported as one figure per zone. The occupancy "
+                      "split comes from sheet 00 ⟦SPLITS⟧ — see the notes in step 2.",
+            sub_f)
 
     entries = {
         3: f"Section = {section}",
@@ -320,14 +375,20 @@ def aggregate_sheet(wb, name, *, title, section, scheme, base, deductible):
         14: "Includes fac = yes",
     }
 
-    source = {"B": "Zona", "C": "Res edif.", "D": "Res cont.", "E": "Res PB",
-              "F": "Com edif.", "G": "Com cont.", "H": "Com PB",
-              "I": "Ind edif.", "J": "Ind cont.", "K": "Ind PB", "L": "Suma"}
-    declared = {"B": "Zone"}
-    for i, bucket in enumerate(BUCKETS):
-        declared[chr(ord("C") + i)] = bucket
-    declared["L"] = "Total"
-    formats = {c: "#,##0" for c in "CDEFGHIJKL"}
+    if detail:
+        source = {"B": "Zona", "C": "Res edif.", "D": "Res cont.", "E": "Res PB",
+                  "F": "Com edif.", "G": "Com cont.", "H": "Com PB",
+                  "I": "Ind edif.", "J": "Ind cont.", "K": "Ind PB", "L": "Suma"}
+        declared = {"B": "Zone"}
+        for i, bucket in enumerate(BUCKETS):
+            declared[chr(ord("C") + i)] = bucket
+        declared["L"] = "Total"
+        value_cols = list("CDEFGHIJKL")
+    else:
+        source = {"B": "Zona", "C": "Suma asegurada"}
+        declared = {"B": "Zone", "C": "Total"}
+        value_cols = ["C"]
+    formats = {c: "#,##0" for c in value_cols}
 
     row = 18
     for index, (period, as_at) in enumerate(VERSIONS, start=1):
@@ -338,16 +399,16 @@ def aggregate_sheet(wb, name, *, title, section, scheme, base, deductible):
         end = record_block(
             ws, header_row=row, selector_col="N",
             source_labels=source, declared=declared,
-            rows=_rows(base, period), formats=formats, note_col="O",
-            total_cols=list("CDEFGHIJKL"),
+            rows=_rows(base, period, detail), formats=formats, note_col="O",
+            total_cols=value_cols,
         )
         entries[end + 1] = f"Info_{index} = N"
         row = end + 7
 
     markers(ws, entries)
     widths(ws, {"A": 34, "B": 10, "N": 10, "O": 46})
-    for col in "CDEFGHIJKL":
-        ws.column_dimensions[col].width = 12
+    for col in value_cols:
+        ws.column_dimensions[col].width = 14
     return ws
 
 
@@ -423,7 +484,7 @@ def main():
                     deductible="2%")
     aggregate_sheet(wb, "07. Wind Aggs", title="07. Hurricane aggregates — Mexico",
                     section="Hurricane", scheme="Mexico Wind", base=WIND_BASE,
-                    deductible="1.5%")
+                    deductible="1.5%", detail=False)
 
     wb.save(OUT)
     result = inject(OUT)

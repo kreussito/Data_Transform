@@ -223,6 +223,45 @@ class Section:
 
 
 @dataclass(frozen=True)
+class Axis:
+    """One row of ⟦AXES⟧ — a dimension a dataset is split along, spec §2.6.
+
+    The buckets of a dataset are the **product** of its axes, which is what makes one
+    mechanism serve four different tables: earthquake and fire are occupancy × cover
+    (nine), engineering is occupancy × Projects/Renewables (six), and windstorm declares
+    the occupancy axis alone (three).
+    """
+
+    dataset: str
+    name: str
+    categories: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SplitRule:
+    """One row of ⟦SPLITS⟧ — a declared ratio, spec §2.6.
+
+    Two jobs in one shape. With ``source_category`` empty the rule distributes a whole
+    axis the cedent never reported. With it set, the rule re-splits a category that
+    arrived merged — ``Commercial`` covering both commercial and industrial risks.
+
+    ``source`` is not decoration. A ratio taken from the cedent's own prior submission
+    and one borrowed from another book are both assumptions, but they are not equally
+    good ones, and the reader has to be able to tell them apart.
+    """
+
+    dataset: str
+    axis: str
+    source_category: str
+    category: str
+    share: float
+    source: str = ""
+
+    def applies_to(self, dataset_key: str) -> bool:
+        return self.dataset == "*" or self.dataset.casefold() == dataset_key.casefold()
+
+
+@dataclass(frozen=True)
 class Reference:
     """One side of a rule — spec §10.1.
 

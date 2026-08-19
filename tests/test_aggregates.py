@@ -327,3 +327,188 @@ def test_the_process_log_records_the_growth(tmp_path):
     assert "Exposure and premium growth (§10.4)" in text
     assert "implied rate" in text
     assert "2026 at expiry" in text
+
+
+# ══════════════════════════════════════════ splits — spec §2.6, S20
+#
+# The buckets of a dataset are the product of its declared axes, and a cedent reports at
+# whatever level it keeps its book. Step 2 multiplies the missing axes onto what came.
+
+from datatransform.model import Axis, SplitRule            # noqa: E402
+from datatransform.transform import _split                 # noqa: E402
+from datatransform.specs import Split, Step2Spec           # noqa: E402
+
+
+def test_the_buckets_are_the_product_of_the_declared_axes():
+    nomenclature, _ = _read()
+    assert nomenclature.buckets_for("06 EQ Aggs") == (
+        "Res Building", "Res Content", "Res BI",
+        "Com Building", "Com Content", "Com BI",
+        "Ind Building", "Ind Content", "Ind BI",
+    )
+    assert nomenclature.buckets_for("07 Wind Aggs") == ("Res", "Com", "Ind")
+
+
+def test_a_dataset_with_one_axis_needs_no_special_case():
+    """Windstorm is not an exception — it is the product of a single axis."""
+    nomenclature, _ = _read()
+    assert len(nomenclature.axes_for("06 EQ Aggs")) == 2
+    assert len(nomenclature.axes_for("07 Wind Aggs")) == 1
+
+
+def test_a_finished_grid_is_left_alone():
+    block, result = _step2("06", "2025 9 months")
+    assert not any("⟦SPLITS⟧" in n for n in result.notes)
+    assert result.records[0].values["Res Building"] == block.records[0].values["Res Building"]
+
+
+def test_a_total_only_report_is_split_by_the_declared_ratios():
+    block, result = _step2("07", "2025 9 months")
+    assert block.fields == ("Zone", "Total")            # step 1 shows what arrived
+
+    first = next(r for r in result.records if r.values["Zone"] == "1")
+    assert first.values["Res"] == pytest.approx(first.values["Total"] * 0.38)
+    assert first.values["Com"] == pytest.approx(first.values["Total"] * 0.42)
+    assert first.values["Ind"] == pytest.approx(first.values["Total"] * 0.20)
+
+
+def test_the_split_names_where_the_ratio_came_from():
+    """A ratio from the cedent and one borrowed elsewhere are not equally good."""
+    _, result = _step2("07", "2025 9 months")
+    note = next(n for n in result.notes if "⟦SPLITS⟧" in n)
+    assert "Cedent book split, 30.09.2025" in note
+    assert "an assumption, not a reading" in note
+
+
+def test_splitting_never_moves_the_total():
+    """It redistributes. That is what lets §10.4 read the same figures either way."""
+    block, result = _step2("07", "2025 9 months")
+    assert block.totals()["Total"] == pytest.approx(result.totals()["Total"])
+    for record in result.records:
+        parts = sum(record.values[b] for b in ("Res", "Com", "Ind"))
+        assert parts == pytest.approx(record.values["Total"])
+
+
+def test_a_total_built_from_its_own_parts_is_not_reported_as_a_passed_check():
+    _, result = _step2("07", "2025 9 months")
+    note = next(n for n in result.notes if n.startswith("Total was the source"))
+    assert "by construction" in note
+    assert not any("all agree" in n for n in result.notes)
+
+
+def test_the_split_survives_the_zone_completion():
+    """A zone added as 0 must carry zeros in the split buckets too, not blanks."""
+    nomenclature, blocks = _read()
+    block = next(b for b in blocks if b.dataset.role == "07")
+    block.records = [r for r in block.records if r.values["Zone"] in {"3", "7"}]
+
+    result = apply_step2(block, step2_for(block.dataset.key), nomenclature, blocks)
+    assert len(result.records) == 42
+    silent = next(r for r in result.records if r.values["Zone"] == "20")
+    assert silent.values["Res"] == 0.0 and silent.values["Total"] == 0.0
+
+
+def _wind_block_reporting(nomenclature, blocks, labels, values):
+    """A hurricane block relabelled to report at some other level."""
+    block = next(b for b in blocks if b.dataset.role == "07")
+    block.dataset = block.dataset.__class__(
+        block.dataset.sheet_name, block.dataset.key,
+        ("Zone", *labels, "Total"), block.dataset.attributes,
+        tuple(labels) + ("Total",),
+    )
+    block.address_map = {"Zone": "B", **{lab: chr(ord("C") + i)
+                                         for i, lab in enumerate(labels)}}
+    for record in block.records:
+        record.values = {"Zone": record.values["Zone"],
+                         **dict(zip(labels, values(record.values["Total"])))}
+    return block
+
+
+def test_a_cover_split_keeps_its_own_figures_and_gains_the_occupancy_axis(monkeypatch):
+    """The cedent's reported margin is never overwritten — only the silent axis is added."""
+    nomenclature, blocks = _read()
+    nomenclature.axes.append(Axis("07 Wind Aggs", "Cover", ("Building", "Content", "BI")))
+    block = _wind_block_reporting(
+        nomenclature, blocks, ["Building", "Content", "BI"],
+        lambda total: (total * 0.7, total * 0.2, total * 0.1),
+    )
+    spec = Step2Spec(sort_by=("Zone",), split=Split(total="Total"))
+    records, created, notes, from_total, assumed = _split(
+        block, spec, block.records, nomenclature)
+
+    assert not from_total
+    assert set(created) == {f"{o} {c}" for o in ("Res", "Com", "Ind")
+                            for c in ("Building", "Content", "BI")}
+    first = records[0]
+    reported_building = first.values["Building"]
+    assert sum(first.values[f"{o} Building"] for o in ("Res", "Com", "Ind")) == \
+        pytest.approx(reported_building)
+    assert first.values["Res Building"] == pytest.approx(reported_building * 0.38)
+    assert any("Occupancy not reported" in n for n in notes)
+    assert set(assumed) == set(created)     # every one rests on the declared ratio
+
+
+def test_a_merged_commercial_bucket_is_resplit_75_25():
+    """'Commercial' covering commercial and industrial — the house convention."""
+    nomenclature, blocks = _read()
+    block = _wind_block_reporting(
+        nomenclature, blocks, ["Res", "Commercial"],
+        lambda total: (total * 0.38, total * 0.62),
+    )
+    spec = Step2Spec(sort_by=("Zone",), split=Split(total="Total"))
+    records, created, notes, _, assumed = _split(
+        block, spec, block.records, nomenclature)
+
+    assert set(created) == {"Com", "Ind"}
+    first = records[0]
+    assert first.values["Res"] == pytest.approx(first.values["Res"])       # untouched
+    assert first.values["Com"] == pytest.approx(first.values["Commercial"] * 0.75)
+    assert first.values["Ind"] == pytest.approx(first.values["Commercial"] * 0.25)
+    note = next(n for n in notes if "merged" in n)
+    assert "House convention" in note
+
+
+def test_a_level_nothing_can_be_built_from_is_refused():
+    nomenclature, blocks = _read()
+    block = next(b for b in blocks if b.dataset.role == "07")
+    block.address_map.pop("Total")                    # no buckets, no total
+    with pytest.raises(ExtractionError, match="will not invent one"):
+        apply_step2(block, step2_for(block.dataset.key), nomenclature, blocks)
+
+
+def test_ratios_that_do_not_close_are_fatal():
+    """A share list summing to 90% is a typo, not an underwriting view."""
+    nomenclature, blocks = _read()
+    nomenclature.splits = [r for r in nomenclature.splits if r.category != "Ind"]
+    block = next(b for b in blocks if b.dataset.role == "07")
+    with pytest.raises(ExtractionError, match="not 100%"):
+        apply_step2(block, step2_for(block.dataset.key), nomenclature, blocks)
+
+
+def test_a_rule_naming_the_dataset_beats_the_house_convention():
+    nomenclature, _ = _read()
+    nomenclature.splits.append(
+        SplitRule("07 Wind Aggs", "Occupancy", "Commercial", "Com", 0.6, "This book")
+    )
+    nomenclature.splits.append(
+        SplitRule("07 Wind Aggs", "Occupancy", "Commercial", "Ind", 0.4, "This book")
+    )
+    chosen = nomenclature.splits_for("07 Wind Aggs", "Occupancy", "Commercial")
+    assert {r.share for r in chosen} == {0.6, 0.4}
+    assert all(r.dataset != "*" for r in chosen)
+
+
+def test_a_split_block_no_longer_reads_as_confirmed():
+    """Three of five columns are a ratio, so the block is not a reading any more."""
+    from datatransform.model import Confidence
+
+    block, result = _step2("07", "2025 9 months")
+    assert block.confidence == Confidence.CONFIRMED
+    assert result.confidence == Confidence.ASSUMED
+    assert set(result.assumed_fields) == {"Res", "Com", "Ind"}
+
+
+def test_an_unsplit_block_keeps_step_1s_confidence():
+    block, result = _step2("06", "2025 9 months")
+    assert result.assumed_fields == ()
+    assert result.confidence == block.confidence

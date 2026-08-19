@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from .model import Dataset, ExtractionError, FieldType, Rule, Section
+from .model import Axis, Dataset, ExtractionError, FieldType, Rule, Section, SplitRule
 
 HEADER_COL_FIRST = 4     # D
 HEADER_COL_LAST = 13     # M
@@ -21,6 +21,10 @@ RULES_ANCHOR = "⟦RULES⟧"
 PERIOD_ANCHOR = "⟦PERIOD ORDER⟧"
 SECTIONS_ANCHOR = "⟦SECTIONS⟧"
 ZONES_ANCHOR = "⟦ZONES⟧"
+AXES_ANCHOR = "⟦AXES⟧"
+SPLITS_ANCHOR = "⟦SPLITS⟧"
+
+ANY_DATASET = "*"
 
 
 def norm(value) -> str:
@@ -100,7 +104,8 @@ class Nomenclature:
     """Sheet 00: the frame — datasets, globals, types, vocabulary and rules."""
 
     def __init__(self, datasets, vocabulary, globals_=None, types=None,
-                 rules=None, period_order=None, sections=None, zones=None):
+                 rules=None, period_order=None, sections=None, zones=None,
+                 axes=None, splits=None):
         self.datasets = datasets
         self.vocabulary = vocabulary
         self.globals = globals_ or {}
@@ -109,6 +114,40 @@ class Nomenclature:
         self.period_order = period_order or {}
         self.sections = sections or []
         self.zones = zones or {}
+        self.axes = axes or []
+        self.splits = splits or []
+
+    def axes_for(self, dataset_key: str) -> list[Axis]:
+        """The dimensions this dataset is split along, in declared order — spec §2.6."""
+        wanted = norm(dataset_key).casefold()
+        return [a for a in self.axes if norm(a.dataset).casefold() == wanted]
+
+    def buckets_for(self, dataset_key: str) -> tuple[str, ...]:
+        """The product of the axes, named by joining the categories — spec §2.6.
+
+        Occupancy × cover gives ``Res Building`` … ``Ind BI``; the occupancy axis alone
+        gives ``Res`` · ``Com`` · ``Ind``. The names this produces are the field names in
+        sheet 00, so the register and the arithmetic cannot drift apart.
+        """
+        names: tuple[str, ...] = ()
+        for axis in self.axes_for(dataset_key):
+            names = (axis.categories if not names
+                     else tuple(f"{a} {b}" for a in names for b in axis.categories))
+        return names
+
+    def splits_for(self, dataset_key: str, axis: str, source_category: str = ""):
+        """Declared ratios for one axis, most specific first — spec §2.6.
+
+        A rule naming the dataset beats a rule naming ``*``, so a house convention can be
+        stated once and overridden where a particular book differs.
+        """
+        wanted, want_from = norm(axis).casefold(), norm(source_category).casefold()
+        matching = [r for r in self.splits
+                    if r.applies_to(dataset_key)
+                    and norm(r.axis).casefold() == wanted
+                    and norm(r.source_category).casefold() == want_from]
+        named = [r for r in matching if r.dataset != "*"]
+        return named or matching
 
     def zones_for(self, scheme: str) -> list[str]:
         """Every zone of a scheme, in declared order — spec §2.5.
@@ -218,7 +257,48 @@ class Nomenclature:
             cls._read_period_order(ws),
             cls._read_sections(ws),
             cls._read_zones(ws),
+            cls._read_axes(ws),
+            cls._read_splits(ws),
         )
+
+    @staticmethod
+    def _read_axes(ws) -> list[Axis]:
+        """⟦AXES⟧ — the dimensions each dataset is split along — spec §2.6."""
+        out = []
+        for row, (dataset, name, categories) in _read_block(ws, AXES_ANCHOR, 3):
+            listed = tuple(c.strip() for c in categories.replace(";", ",").split(",")
+                           if c.strip())
+            if not name or not listed:
+                raise ExtractionError(
+                    f"sheet 00 ⟦AXES⟧ row {row}: {dataset!r} declares an axis with no "
+                    f"{'name' if not name else 'categories'}"
+                )
+            out.append(Axis(dataset, name, listed))
+        return out
+
+    @staticmethod
+    def _read_splits(ws) -> list[SplitRule]:
+        """⟦SPLITS⟧ — declared ratios, with where they came from — spec §2.6."""
+        out = []
+        for row, cells in _read_block(ws, SPLITS_ANCHOR, 6):
+            dataset, axis, frm, category, share, source = cells
+            if not category:
+                continue
+            try:
+                value = float(str(share).replace("%", "").replace(",", "."))
+            except (TypeError, ValueError):
+                raise ExtractionError(
+                    f"sheet 00 ⟦SPLITS⟧ row {row}: share {share!r} is not a number"
+                )
+            if str(share).strip().endswith("%") or value > 1:
+                value /= 100.0
+            if value < 0:
+                raise ExtractionError(
+                    f"sheet 00 ⟦SPLITS⟧ row {row}: share {share!r} is negative"
+                )
+            out.append(SplitRule(dataset or ANY_DATASET, axis, frm, category,
+                                 value, source))
+        return out
 
     @staticmethod
     def _read_zones(ws) -> dict[str, list[str]]:

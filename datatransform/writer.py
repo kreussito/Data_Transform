@@ -230,7 +230,14 @@ class BlockWriter:
 
         for note in result.notes:
             self._line(f"· {note}")
-        self._line(f"Confidence carried from step 1: {block.confidence.value}")
+        if result.assumed_fields:
+            self._line(
+                f"Confidence: {result.confidence.value} — step 1 read "
+                f"{block.confidence.value}, but {len(result.assumed_fields)} column(s) "
+                f"rest on a declared ratio rather than on a reported figure"
+            )
+        else:
+            self._line(f"Confidence carried from step 1: {block.confidence.value}")
         self.row += 1
 
         columns = [block.provenance_label, *result.columns]
