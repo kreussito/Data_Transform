@@ -262,13 +262,24 @@ Mexico Wind   1, 2, 3, …, 42                                              (42 
 A block says which catalogue it is on through the `Zone scheme` attribute. A scheme the
 block names but `⟦ZONES⟧` does not list is **fatal** — the tool will not invent a zoning.
 
-**Absent zones are written as 0.** A cedent lists only the zones it has exposure in, so
-a 52-zone scheme typically arrives with nine rows. Step 2 completes the list, and the
-completion is reported: *"43 declared zone(s) with no entry in the source, shown as 0"*.
-This is value-preserving — the control sum is unchanged — and it is the point of the
-exercise: an absent row reads as *no data*, a zero reads as *nothing there*, and only the
-second is a statement about the portfolio. Step 1 is untouched; it shows the nine rows
-the cedent sent, because step 1 carries only what the sheet says (S11).
+**Every declared zone appears, and a zone with nothing in it reads 0.** How that comes
+about depends on the cedent, and the two cases are handled differently on purpose:
+
+| The cedent sends | Step 1 | Step 2 |
+|---|---|---|
+| the complete table, zeros and all | all 52 rows — they were extracted | nothing to complete |
+| only the zones it writes in | those rows, and no others | fills the rest from `⟦ZONES⟧` and says so |
+
+The first is the normal case in Mexico, where the zoning is the regulator's and the form
+has a row per zone. The second is common elsewhere, and there step 2 reports what it
+added: *"46 declared zone(s) with no entry in the source, shown as 0"*.
+
+The completion is value-preserving — adding zeros cannot move the control sum — and it is
+the point of the exercise: an absent row reads as *no data*, a zero reads as *nothing
+there*, and only the second is a statement about the portfolio. **Step 1 is never
+completed**, in either case: it shows the rows the sheet has and no more, because step 1
+carries only what was extracted (S11). Where the two differ, the difference is itself
+information about how the cedent reports.
 
 #### `Total` — derived or checked, never corrected
 
@@ -1039,7 +1050,7 @@ percentage would not show.
 `⟦ZONES⟧` (§2.5). Step 2 writes every declared zone, and reports the ones it added:
 
 ```
-· 43 declared zone(s) with no entry in the source, shown as 0: 3, 4, 5, 6, … (value-preserving)
+· 46 declared zone(s) with no entry in the source, shown as 0: 3, 4, 5, 6, … (value-preserving)
 ```
 
 It is value-preserving in the strict sense S6 requires — adding zeros cannot move a
@@ -1380,9 +1391,9 @@ Implied rate change = (1 + premium growth) ÷ (1 + exposure growth) − 1. Beyon
 is flagged — a warning, never an error: a book may shrink or grow for good reasons.
 
   Version             As at         Exposure   Change
-  2025 9 months       30.09.2025     162,226
-  2026 at inception   01.01.2026     172,282    +6.2%
-  2026 at expiry      31.12.2026     182,987    +6.2%
+  2025 9 months       30.09.2025     311,508
+  2026 at inception   01.01.2026     330,819    +6.2%
+  2026 at expiry      31.12.2026     351,379    +6.2%
 
   Premium, expiring year   2025          1,512
   Premium, renewal year    2026 EPI      1,648
@@ -1466,7 +1477,7 @@ Resolved:
 | Rate-change threshold | **20%**, likewise — §10.4 |
 | Header register width | **Read from row 4**, not fixed at ten columns; older packs fall back to `D … M` — §3.1 |
 | `06` vs `07` | **No rule compares them.** Either peril can be bought alone, and the covered books need not match — §2.5 |
-| Zones with no exposure | **Written as 0**, from the `⟦ZONES⟧` catalogue — an absent row is silence, a zero is an answer |
+| Zones with no exposure | **Written as 0.** Where the cedent already sends them, step 1 shows them; where it does not, step 2 completes from `⟦ZONES⟧` — an absent row is silence, a zero is an answer |
 | A `Total` disagreeing with its parts | **Reported, never corrected** — §9.2.1 S19 |
 | Occupancy / cover splits | `⟦SPLITS⟧` declared and **deliberately empty** until the ratios are settled |
 
@@ -1594,10 +1605,10 @@ full submission — it carries `01`, `02`, `06` and `07` and nothing else:
 
 | | |
 |---|---|
-| `06. EQ Aggs` | 11 headers, **three stacked versions** on one sheet, 9 of 52 zones listed |
-| `07. Wind Aggs` | the same shape on a 42-zone scheme with no sub-zones |
-| `⟦ZONES⟧` | both catalogues, so the zero-fill has something to fill against |
-| Zones present | `1`, `2`, `13a`, `13b`, `14a`, `14c`, `22`, … — deliberately **not** contiguous, so the natural sort is tested on the sub-zones |
+| `06. EQ Aggs` | 11 headers, **three stacked versions** on one sheet, all 52 zones — three of them at 0 |
+| `07. Wind Aggs` | the same shape on a 42-zone scheme with no sub-zones, all 42 present |
+| `⟦ZONES⟧` | both catalogues — here they confirm the tables are complete; the zero-fill itself is covered by test |
+| Zone order | the source lists zones in catalogue order; the sort is exercised on `13a`/`13b` and `14a`–`14d` |
 | `01` / `02` | one section each, carrying only what §10.4 reads: `Premium` for N and `EPI` for N+1 |
 
 A note on the sandbox this was built in: LibreOffice was unavailable, so formula results

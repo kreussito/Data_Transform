@@ -92,16 +92,42 @@ def test_an_unknown_zone_scheme_is_fatal():
 
 # ────────────────────────────── every zone appears, with 0 where silent
 
-def test_zones_without_exposure_are_shown_as_zero():
+def test_the_source_carries_every_zone_so_step_1_shows_them_all():
+    """This cedent returns the regulator's full form, zeros and all — nothing to fill."""
     block, result = _step2("06", "2025 9 months")
-    assert len(block.records) == 9              # what the cedent listed
-    assert len(result.records) == 52            # the whole scheme
+    assert len(block.records) == 52             # already complete in step 1
+    assert len(result.records) == 52
+
+    by_zone = {r.values["Zone"]: r for r in block.records}
+    assert by_zone["1"].values["Total"] > 0
+    assert by_zone["7"].values["Total"] == 0.0                      # written, not absent
+    assert all(by_zone["7"].values[b] == 0.0 for b in block.measure_fields)
+    assert not any("shown as 0" in n for n in result.notes)
+
+
+def test_wind_too_arrives_complete():
+    block, result = _step2("07", "2025 9 months")
+    assert len(block.records) == 42
+    zeros = [r.values["Zone"] for r in block.records if r.values["Total"] == 0.0]
+    assert zeros == ["14", "36"]
+    assert not any("shown as 0" in n for n in result.notes)
+
+
+def test_zones_the_cedent_omits_are_completed_with_zero():
+    """The other cedent — a short list, filled from ⟦ZONES⟧ in step 2."""
+    nomenclature, blocks = _read()
+    block = next(b for b in blocks if b.dataset.role == "06")
+    kept = {"1", "2", "13a", "14a", "22", "48"}
+    block.records = [r for r in block.records if r.values["Zone"] in kept]
+
+    result = apply_step2(block, step2_for(block.dataset.key), nomenclature, blocks)
+    assert len(result.records) == 52
+    assert any("46 declared zone(s)" in n and "shown as 0" in n for n in result.notes)
 
     by_zone = {r.values["Zone"]: r for r in result.records}
-    assert by_zone["1"].values["Total"] > 0
-    assert by_zone["7"].values["Total"] == 0.0
-    assert all(by_zone["7"].values[b] == 0.0 for b in block.measure_fields)
-    assert any("shown as 0" in n for n in result.notes)
+    assert by_zone["3"].values["Total"] == 0.0
+    assert all(by_zone["3"].values[b] == 0.0 for b in block.measure_fields)
+    assert block.totals()["Total"] == result.totals()["Total"]      # value-preserving
 
 
 def test_completing_the_zone_list_does_not_move_a_total():

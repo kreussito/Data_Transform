@@ -107,27 +107,62 @@ VERSIONS = [
     ("2026 at expiry", "31.12.2026"),
 ]
 
-# Only the zones with exposure. Everything else is filled with 0 from ⟦ZONES⟧, which is
-# the point: a zone with none is a fact worth seeing, not an absence.
-#            zone   ResB   ResC  ResBI   ComB   ComC  ComBI   IndB   IndC  IndBI
+# ── the portfolio ─────────────────────────────────────────────────────────────
+# The cedent returns the **complete** zone table, which is how a Mexican submission
+# normally arrives: the zoning is the regulator's, so the form has a row per zone whether
+# or not there is anything in it. A zone at 0 is therefore a statement — "we write nothing
+# here" — and not a gap. Zones 7, 25 and 40 (EQ) and 14 and 36 (Wind) are those.
+#
+# A zone is described by its total sum insured and an occupancy pattern rather than by
+# nine loose numbers, so the fixture reads as a portfolio and the nine buckets stay
+# mutually consistent.
+MIX = {                # ResB  ResC  ResBI  ComB  ComC  ComBI  IndB  IndC  IndBI
+    "res": (0.42, 0.11, 0.02, 0.20, 0.06, 0.04, 0.10, 0.03, 0.02),
+    "com": (0.20, 0.05, 0.01, 0.38, 0.11, 0.08, 0.12, 0.03, 0.02),
+    "ind": (0.14, 0.04, 0.01, 0.18, 0.05, 0.04, 0.36, 0.11, 0.07),
+    "mix": (0.28, 0.07, 0.01, 0.29, 0.09, 0.06, 0.14, 0.04, 0.02),
+}
+
+# Mexican earthquake exposure concentrates in the Valley of Mexico (13a/14a) and on the
+# Pacific and Gulf coasts; 48 is the largest single accumulation in this book.
 EQ_BASE = [
-    ("1",     4_820, 1_205,   180, 3_140,   940,   620, 1_880,   560,   410),
-    ("2",     2_310,   578,    86, 1_505,   451,   298,   902,   270,   197),
-    ("13a",   8_940, 2_235,   334, 5_820, 1_746, 1_152, 3_490, 1_040,   762),
-    ("13b",   3_170,   792,   118, 2_064,   619,   409, 1_238,   369,   270),
-    ("14a",  12_460, 3_115,   466, 8_112, 2_433, 1_606, 4_867, 1_450, 1_062),
-    ("14c",   1_890,   472,    70, 1_230,   369,   243,   738,   220,   161),
-    ("22",    6_540, 1_635,   244, 4_258, 1_277,   843, 2_555,   761,   558),
-    ("35",     980,   245,    36,   638,   191,   126,   383,   114,    83),
-    ("48",   15_720, 3_930,   588, 10_233, 3_069, 2_026, 6_140, 1_829, 1_340),
+    ("1",  13_755, "mix"), ("2",   6_597, "res"), ("3",   2_450, "res"),
+    ("4",   1_820, "res"), ("5",   3_960, "mix"), ("6",   5_240, "com"),
+    ("7",       0, "res"), ("8",   2_180, "res"), ("9",   4_310, "mix"),
+    ("10",  7_620, "com"), ("11",  1_540, "ind"), ("12",  3_070, "res"),
+    ("13a", 25_519, "com"), ("13b", 9_049, "mix"),
+    ("14a", 35_571, "com"), ("14b", 6_880, "mix"),
+    ("14c",  5_393, "res"), ("14d", 2_940, "ind"),
+    ("15",  4_120, "mix"), ("16",  1_260, "res"), ("17",  8_450, "ind"),
+    ("18",  3_310, "com"), ("19",  2_070, "res"), ("20",  5_890, "mix"),
+    ("21",  1_180, "res"), ("22", 18_671, "com"), ("23",  2_640, "ind"),
+    ("24",  4_730, "mix"), ("25",      0, "res"), ("26",  3_180, "res"),
+    ("27",  6_240, "com"), ("28",  1_920, "res"), ("29",  2_580, "mix"),
+    ("30",  9_140, "ind"), ("31",  1_470, "res"), ("32",  3_860, "com"),
+    ("33",  2_310, "mix"), ("34",  5_070, "res"), ("35",  2_796, "res"),
+    ("36",  1_640, "ind"), ("37",  7_290, "com"), ("38",  2_150, "res"),
+    ("39",  3_540, "mix"), ("40",      0, "res"), ("41",  4_680, "com"),
+    ("42",  1_830, "res"), ("43",  2_960, "ind"), ("44",  6_410, "mix"),
+    ("45",  1_390, "res"), ("46",  3_720, "com"), ("47",  2_240, "res"),
+    ("48", 44_875, "com"),
 ]
+
+# Hurricane exposure sits on the Caribbean and Gulf coasts — 3, 7, 19 and 42 carry it.
 WIND_BASE = [
-    ("3",     5_610, 1_402,   210, 3_652, 1_095,   723, 2_191,   653,   478),
-    ("7",    11_240, 2_810,   421, 7_318, 2_195, 1_449, 4_391, 1_308,   958),
-    ("12",    2_760,   690,   103, 1_797,   539,   355, 1_078,   321,   235),
-    ("19",    8_130, 2_032,   304, 5_293, 1_587, 1_047, 3_176,   946,   693),
-    ("28",    1_420,   355,    53,   924,   277,   183,   554,   165,   121),
-    ("42",    9_870, 2_467,   370, 6_426, 1_927, 1_272, 3_856, 1_148,   841),
+    ("1",   1_240, "res"), ("2",   3_570, "mix"), ("3",  16_014, "com"),
+    ("4",   2_180, "res"), ("5",   5_320, "mix"), ("6",   1_760, "res"),
+    ("7",  32_090, "com"), ("8",   4_610, "ind"), ("9",   2_240, "res"),
+    ("10",  6_870, "mix"), ("11",  1_390, "res"), ("12",  7_878, "com"),
+    ("13",  3_050, "mix"), ("14",      0, "res"), ("15",  2_640, "res"),
+    ("16",  5_140, "com"), ("17",  1_820, "ind"), ("18",  3_960, "mix"),
+    ("19", 23_208, "com"), ("20",  2_470, "res"), ("21",  6_310, "mix"),
+    ("22",  1_580, "res"), ("23",  4_230, "ind"), ("24",  2_890, "com"),
+    ("25",  1_340, "res"), ("26",  5_760, "mix"), ("27",  2_060, "res"),
+    ("28",  4_052, "res"), ("29",  3_410, "com"), ("30",  1_670, "ind"),
+    ("31",  6_540, "mix"), ("32",  2_320, "res"), ("33",  4_890, "com"),
+    ("34",  1_450, "res"), ("35",  3_180, "mix"), ("36",      0, "res"),
+    ("37",  5_430, "com"), ("38",  2_710, "res"), ("39",  1_960, "ind"),
+    ("40",  4_360, "mix"), ("41",  2_150, "res"), ("42", 28_177, "com"),
 ]
 
 # Version-to-version growth. The book grows into the renewal year and keeps growing
@@ -135,11 +170,21 @@ WIND_BASE = [
 GROWTH = {"2025 9 months": 1.0, "2026 at inception": 1.062, "2026 at expiry": 1.128}
 
 
+def _check_catalogue(base, zones, name):
+    """The fixture must cover the declared zoning exactly — no gaps, no strays."""
+    listed = [zone for zone, *_ in base]
+    if listed != zones:
+        missing = [z for z in zones if z not in listed]
+        extra = [z for z in listed if z not in zones]
+        raise SystemExit(f"{name}: missing {missing}, unexpected {extra}, "
+                         f"or out of catalogue order")
+
+
 def _rows(base, version):
     factor = GROWTH[version]
     out = []
-    for zone, *buckets in base:
-        scaled = [round(b * factor) for b in buckets]
+    for zone, size, mix in base:
+        scaled = [round(size * share * factor) for share in MIX[mix]]
         row = {"B": zone}
         for i, value in enumerate(scaled):
             row[chr(ord("C") + i)] = value
@@ -198,9 +243,10 @@ def build_sheet00(wb):
         put(ws, f"C{r}", ", ".join(codes), body_f)
         r += 1
     put(ws, f"B{r + 1}",
-        "The complete zoning. A cedent lists only the zones it has exposure in; the rest "
-        "are shown as 0, because an absent zone reads as 'no data' and a zero reads as "
-        "'nothing there'.", sub_f)
+        "The complete zoning. This cedent returns every zone, so step 1 already shows all "
+        "of them; where one lists only the zones it has exposure in, step 2 completes the "
+        "rest with 0 — an absent zone reads as 'no data', a zero reads as 'nothing there'.",
+        sub_f)
 
     r = block_header(ws, r + 3, "⟦GLOBAL⟧", ["Attribute", "Value"])
     for name, value, fmt in [("Actual year", 2025, "0"),
@@ -351,6 +397,9 @@ def epi_sheet(wb, name, *, title, section, epi):
 
 def main():
     from datatransform.recalc import inject
+
+    _check_catalogue(EQ_BASE, EQ_ZONES, "EQ_BASE")
+    _check_catalogue(WIND_BASE, WIND_ZONES, "WIND_BASE")
 
     wb = Workbook()
     wb.remove(wb.active)
