@@ -1032,11 +1032,68 @@ def build_engineering_combined():
     return wb, "Intake_EngineeringCombined_v1.xlsx", cached
 
 
+def build_fire_cat_losses():
+    """Fire + Earthquake + Hurricane carrying only ``01``, ``02`` and ``04``.
+
+    The submission shape where the cedent sends the money and the cat events, and nothing
+    else: history and projection for every section, cat losses for the two cat ones. The
+    Fire section declares no loss dataset at all, which is the point of including it —
+    §10.3's per-risk group has nothing to sum, and must say so rather than reporting a
+    comparison it never made.
+    """
+    wb = Workbook()
+    wb.remove(wb.active)
+    sections = [
+        ("Fire", "per risk", ["01", "02"]),
+        ("Earthquake", "cat", ["01", "02", "04"]),
+        ("Windstorm", "cat", ["01", "02", "04"]),
+    ]
+    datasets = [
+        ("01. History Fire", "01 History Fire", HEADERS_01, ATTRS_01),
+        ("01. History EQ", "01 History EQ", HEADERS_01, ATTRS_01),
+        ("01. History Wind", "01 History Wind", HEADERS_01, ATTRS_01),
+        ("02. EPI Fire", "02 EPI Fire", HEADERS_02, ATTRS_02),
+        ("02. EPI EQ", "02 EPI EQ", HEADERS_02, ATTRS_02),
+        ("02. EPI Wind", "02 EPI Wind", HEADERS_02, ATTRS_02),
+        ("04. Cat Losses EQ", "04 Cat EQ", HEADERS_04, ATTRS_04),
+        ("04. Cat Losses Wind", "04 Cat Wind", HEADERS_04, ATTRS_04),
+    ]
+    # R-01 and R-09 name ``03``, which this treaty does not carry. They are left in
+    # place deliberately: a rule whose dataset is absent is *not applicable*, not
+    # failed, and the pack is where that distinction gets exercised — spec §10.1.
+    build_sheet00(wb, treaty_type="Fire + Nat Cat (money and events only)",
+                  sections=sections, datasets=datasets)
+
+    history_sheet(wb, "01. History Fire", section="Fire",
+                  title="01. History — Fire section", **FIRE_HISTORY)
+    history_sheet(wb, "01. History EQ", section="Earthquake",
+                  title="01. History — Earthquake section", **EQ_HISTORY)
+    history_sheet(wb, "01. History Wind", section="Windstorm",
+                  title="01. History — Windstorm section", **WIND_HISTORY)
+
+    epi_sheet(wb, "02. EPI Fire", section="Fire",
+              title="02. EPI Projections — Fire section",
+              periods=PERIODS, epi=_epi(19200, 14400, 18500, 20900))
+    epi_sheet(wb, "02. EPI EQ", section="Earthquake",
+              title="02. EPI Projections — Earthquake section",
+              periods=PERIODS, epi=_epi(7250, 5430, 7000, 7900))
+    epi_sheet(wb, "02. EPI Wind", section="Windstorm",
+              title="02. EPI Projections — Windstorm section",
+              periods=PERIODS, epi=_epi(8600, 6440, 8300, 9250))
+
+    cat_sheet(wb, "04. Cat Losses EQ", section="Earthquake",
+              title="04. Cat Losses — Earthquake", events=EQ_EVENTS, with_claims=True)
+    cat_sheet(wb, "04. Cat Losses Wind", section="Windstorm",
+              title="04. Cat Losses — Windstorm", events=WIND_EVENTS,
+              with_claims=False)
+    return wb, "Intake_FireCatLosses_v1.xlsx"
+
+
 def main():
     from datatransform.recalc import inject
 
     builders = (build_engineering, build_fire_cat, build_fire_eq_wind,
-                build_engineering_combined)
+                build_engineering_combined, build_fire_cat_losses)
     for builder in builders:
         built = builder()
         wb, name = built[0], built[1]

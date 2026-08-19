@@ -30,8 +30,9 @@ ENGINEERING = ROOT / "Intake_Engineering_v1.xlsx"
 COMBINED = ROOT / "Intake_EngineeringCombined_v1.xlsx"
 FIRE_CAT = ROOT / "Intake_FireCat_v1.xlsx"
 FIRE_EQ_WIND = ROOT / "Intake_FireEQWind_v1.xlsx"
+FIRE_CAT_LOSSES = ROOT / "Intake_FireCatLosses_v1.xlsx"
 
-ALL = [FIRE, ENGINEERING, FIRE_CAT, FIRE_EQ_WIND, COMBINED]
+ALL = [FIRE, ENGINEERING, FIRE_CAT, FIRE_EQ_WIND, COMBINED, FIRE_CAT_LOSSES]
 
 
 def _blocks(path):
@@ -594,3 +595,72 @@ def test_a_per_risk_section_may_carry_cat_losses_too(tmp_path):
     assert all(r.status != "failed" for r in report.rule_results)
     # One per-risk section, both loss datasets, summed by the §10.3 check.
     assert [(t.kind, t.roles) for t in report.loss_share] == [("per risk", ("03", "04"))]
+
+
+# ═════════════════════════ Fire + Nat Cat carrying only 01, 02 and 04
+#
+# The submission shape where the cedent sends the money and the cat events and nothing
+# else. The Fire section is the interesting part: it declares no loss dataset at all.
+
+def test_the_pack_carries_exactly_the_three_sheet_kinds():
+    wb = load_workbook(FIRE_CAT_LOSSES, data_only=True)
+    assert wb.sheetnames == [
+        "00. NC+Interdep",
+        "01. History Fire", "01. History EQ", "01. History Wind",
+        "02. EPI Fire", "02. EPI EQ", "02. EPI Wind",
+        "04. Cat Losses EQ", "04. Cat Losses Wind",
+    ]
+
+
+def test_every_section_is_read_and_the_cat_ones_carry_their_events():
+    nomenclature, blocks = _blocks(FIRE_CAT_LOSSES)
+    assert {s.name for s in nomenclature.sections} == {"Fire", "Earthquake", "Windstorm"}
+    assert {b.section for b in blocks if b.dataset.role == "01"} == {
+        "Fire", "Earthquake", "Windstorm"}
+    assert {b.section for b in blocks if b.dataset.role == "04"} == {
+        "Earthquake", "Windstorm"}
+    assert not [b for b in blocks if b.dataset.role in ("03", "05")]
+
+
+def test_a_rule_naming_an_absent_dataset_is_not_applicable_never_failed():
+    """Fire declares no 03, so R-01 and R-09 have nothing to test — spec §10.1."""
+    nomenclature, blocks = _blocks(FIRE_CAT_LOSSES)
+    results = run_rules(nomenclature, blocks)
+    fire = [r for r in results if r.section == "Fire" and r.rule.id in ("R-01", "R-09")]
+
+    assert len(fire) == 2
+    assert all(r.status == "not applicable" for r in fire)
+    assert all("03 is not in this pack" in r.detail for r in fire)
+    assert not [r for r in results if r.status == "failed"]
+
+
+def test_the_cat_group_sums_both_perils_against_both_histories():
+    """§10.3 on a pack whose only losses are cat: EQ + Wind, held against EQ + Wind."""
+    from datatransform.lossshare import loss_share_tables
+
+    nomenclature, blocks = _blocks(FIRE_CAT_LOSSES)
+    tables = loss_share_tables(nomenclature, blocks)
+    assert [t.kind for t in tables] == ["cat"]
+
+    table = tables[0]
+    assert set(table.sections) == {"Earthquake", "Windstorm"}
+    assert set(table.sheets) == {"01. History EQ", "01. History Wind"}
+    assert table.rows, "the cat group must produce a year table"
+
+
+def test_the_fire_section_gets_no_loss_share_block_at_all(tmp_path):
+    """Nothing declared is nothing to compare — the sheet stays as it was."""
+    source = tmp_path / FIRE_CAT_LOSSES.name
+    shutil.copy2(FIRE_CAT_LOSSES, source)
+    out = tmp_path / "out.xlsx"
+    report = run(source, out, tmp_path / "logs")
+    assert report.ok, [o.detail for o in report.outcomes if o.status == "error"]
+
+    wb = load_workbook(out, data_only=True)
+    def has_block(sheet):
+        return any("DECLARED LOSSES" in c.value.upper()
+                   for row in wb[sheet].iter_rows() for c in row
+                   if isinstance(c.value, str))
+
+    assert not has_block("01. History Fire")
+    assert has_block("01. History EQ") and has_block("01. History Wind")
