@@ -264,6 +264,17 @@ STEP2: dict[str, Step2Spec] = {
         identity=Identity(total="Total"),
         cumulative=(Cumulative("Cumulative exposure %", "Total"),),
     ),
+    # 08 is the cedent's own split table — the book, not the zones. It is a dataset in
+    # its own right (it gets both steps like any other) *and* the source of the ratios
+    # 06/07 bridge with, which is why it carries the same identity check: a Total that
+    # disagrees with its parts would quietly distort every zone downstream.
+    "08 Splits": Step2Spec(
+        sort_by=("Category",),
+        ascending=True,
+        identity=Identity(total="Total",
+                          parts=("Building", "Content", "BI")),
+        cumulative=(Cumulative("Share of the book %", "Total"),),
+    ),
     "03 Large": Step2Spec(
         sort_by=("Year", "Date of Loss"),
         ascending=True,
@@ -305,4 +316,5 @@ STEP2_BY_ROLE: dict[str, Step2Spec] = {
     "05": STEP2["05 Profile"],
     "06": STEP2["06 EQ Aggs"],
     "07": STEP2["06 EQ Aggs"],      # windstorm: the same dataset, a different zoning
+    "08": STEP2["08 Splits"],
 }

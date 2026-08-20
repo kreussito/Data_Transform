@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from .bridge import build_bridge, fit_margins
 from .model import Block, Confidence, ExtractionError, Hypothesis, Record
 from .nomenclature import norm
 from .specs import AggregateSpec, Step2Spec
@@ -198,170 +199,240 @@ def _derive_bounds(block: Block, spec: Step2Spec):
     return records, derived, continuity(pairs)
 
 
-@dataclass
-class _AxisPlan:
-    """How one split axis is going to be satisfied — spec §2.6.
+def _reported_level(block: Block, occupancy, covers, segments, total: str):
+    """What the source actually reports, best first — spec §2.6.
 
-    ``labels`` are the names the block actually uses along this axis, or ``None`` where
-    the block is silent about it. ``mapping`` takes each declared category to the label
-    it comes from and the factor to apply — which makes the three cases one shape:
-
-    ============ ================================ ==========
-    reported     ``Res → ("Res", 1.0)``           factor 1
-    merged       ``Ind → ("Commercial", 0.25)``   re-split
-    declared     ``Ind → (None, 0.20)``           multiplied on
-    ============ ================================ ==========
+    The order is the order of information: both margins beat one, one beats a
+    segmentation that has to be translated, and that beats a bare total.
     """
+    have = set(block.fields)
+    occ = [o for o in occupancy if o in have]
+    cov = [c for c in covers if c in have]
+    seg = [s for s in segments if s in have]
 
-    axis: object
-    kind: str                                     # reported | merged | declared
-    labels: tuple[str, ...] | None
-    mapping: dict[str, tuple[str | None, float]]
-    source: str = ""
+    if occ and cov:
+        return "both", (tuple(occ), tuple(cov))
+    if occ:
+        return "occupancy", tuple(occ)
+    if cov:
+        return "cover", tuple(cov)
+    if seg:
+        return "segment", tuple(seg)
+    if total in have:
+        return "total", (total,)
+    return "", ()
 
-    @property
-    def score(self) -> int:
-        return {"reported": 2, "merged": 1, "declared": 0}[self.kind]
 
+def _refuse_unused_levels(block: Block, targets, total: str, kind: str, labels) -> None:
+    """A reported column the bridge does not consume must never be dropped in silence.
 
-def _check_shares(rules, where: str) -> None:
-    """Ratios that do not close are a typo, not a judgement — so they are fatal."""
-    total = sum(r.share for r in rules)
-    if abs(total - 1.0) > 0.005:
+    Two columns describing the same book on different axes is not a level the tool can
+    read — and quietly using one and discarding the other would lose money without
+    leaving a trace, which is the one thing this step must not do.
+    """
+    used = set(labels[0] + labels[1]) if kind == "both" else set(labels)
+    unused = [f for f in block.numeric_fields
+              if f not in used and f != total and f not in set(targets)]
+    if unused:
         raise ExtractionError(
-            f"sheet 00 ⟦SPLITS⟧ {where}: the shares sum to {total:.1%}, not 100% — "
-            "a split may redistribute a figure but never change it"
+            f"{block.sheet_name!r} block {block.index}: the block reports "
+            f"{', '.join(unused)}, which the split does not consume at the level it "
+            f"chose ({kind or 'none'}). Either that column belongs to a level sheet 00 "
+            "does not declare, or two levels arrived at once — both need saying out "
+            "loud rather than one of them being dropped"
         )
 
 
-def _axis_options(axis, dataset_key: str, nomenclature) -> list[_AxisPlan]:
-    """Every way this axis could be satisfied, best first — spec §2.6."""
-    out = [_AxisPlan(axis, "reported", tuple(axis.categories),
-                     {c: (c, 1.0) for c in axis.categories})]
+def _split(block: Block, spec: Step2Spec, records, nomenclature, blocks=None):
+    """Bridge what arrived onto the dataset's target cells — spec §2.6, S20.
 
-    # Merged: a label covering several categories, e.g. "Commercial" for Com and Ind.
-    merged: dict[str, list] = {}
-    for rule in nomenclature.splits:
-        if (rule.applies_to(dataset_key) and rule.source_category
-                and norm(rule.axis).casefold() == norm(axis.name).casefold()
-                and rule.category in axis.categories):
-            merged.setdefault(rule.source_category, []).append(rule)
-    if merged:
-        mapping, labels, sources = {}, [], []
-        for category in axis.categories:
-            hit = next(((label, r) for label, rules in merged.items()
-                        for r in rules if r.category == category), None)
-            label, share = (hit[0], hit[1].share) if hit else (category, 1.0)
-            if hit and hit[1].source:
-                sources.append(hit[1].source)
-            mapping[category] = (label, share)
-            if label not in labels:
-                labels.append(label)
-        for label, rules in merged.items():
-            _check_shares(rules, f"{label!r} on axis {axis.name!r}")
-        out.append(_AxisPlan(axis, "merged", tuple(labels), mapping,
-                             "; ".join(dict.fromkeys(sources))))
+    Two steps, and keeping them apart is what makes every case one case: **expand** what
+    the source reports onto the section's occupancy × cover grid, then **project** that
+    grid onto the axes the dataset actually declares. Earthquake declares both, so
+    nothing is projected away; windstorm declares occupancy alone, so the cover axis is
+    summed out — which still uses the cover information rather than discarding it.
 
-    # Declared: the block never mentions this axis, so the whole of it is multiplied on.
-    rules = nomenclature.splits_for(dataset_key, axis.name)
-    if rules:
-        _check_shares(rules, f"axis {axis.name!r} of {dataset_key!r}")
-        by_category = {r.category: r for r in rules}
-        if all(c in by_category for c in axis.categories):
-            out.append(_AxisPlan(
-                axis, "declared", None,
-                {c: (None, by_category[c].share) for c in axis.categories},
-                "; ".join(dict.fromkeys(r.source for r in rules if r.source)),
-            ))
-    return out
-
-
-def _base_field(labels: list[str], total: str) -> str:
-    """The field a target bucket is computed from — the reported axes only."""
-    return " ".join(labels) if labels else total
-
-
-def _split(block: Block, spec: Step2Spec, records, nomenclature):
-    """Expand what arrived into the dataset's full bucket set — spec §2.6, S20.
-
-    A split redistributes; it never creates. Every reported figure comes out untouched
-    and the record total is unchanged, so this is value-preserving in sum even though it
-    is plainly value-adding in detail.
+    A split redistributes and never creates: the record total is unchanged.
     """
     rule = spec.split
     if rule is None or nomenclature is None:
         return records, (), [], False, ()
 
     axes = nomenclature.axes_for(block.dataset.key)
-    buckets = nomenclature.buckets_for(block.dataset.key)
-    if not axes or not buckets:
+    targets = nomenclature.buckets_for(block.dataset.key)
+    if not axes or not targets:
         return records, (), [], False, ()
-    if all(b in block.fields for b in buckets):
-        return records, (), [], False, ()           # the finished grid arrived
+    if all(t in block.fields for t in targets):
+        # The finished grid arrived. Any *other* level column describes the same book a
+        # second way, and choosing between them silently is not the tool's to do.
+        _refuse_unused_levels(block, targets, rule.total, "reported", targets)
+        return records, (), [], False, ()
 
-    from itertools import product as _product
+    occupancy = tuple(axes[0].categories)
+    target_covers = tuple(axes[1].categories) if len(axes) > 1 else ()
+    segments = tuple(nomenclature.segment_categories())
 
-    options = [_axis_options(a, block.dataset.key, nomenclature) for a in axes]
-    chosen = None
-    for combination in _product(*options):
-        labels = [p.labels for p in combination if p.labels is not None]
-        needed = ([" ".join(parts) for parts in _product(*labels)] if labels
-                  else [rule.total])
-        if not all(f in block.fields for f in needed):
-            continue
-        if chosen is None or sum(p.score for p in combination) > sum(p.score
-                                                                    for p in chosen):
-            chosen = combination
+    bridge = build_bridge(nomenclature, blocks or [], block.section,
+                          occupancy, target_covers or nomenclature.cover_categories())
+    if bridge is None:
+        return _declared_split(block, spec, records, nomenclature, targets, axes)
 
-    if chosen is None:
-        missing = [a.name for a in axes]
+    kind, labels = _reported_level(block, occupancy, bridge.covers, segments, rule.total)
+    _refuse_unused_levels(block, targets, rule.total, kind, labels)
+    if not kind:
         raise ExtractionError(
-            f"{block.sheet_name!r} block {block.index}: the source reports neither the "
-            f"{len(buckets)} buckets nor a level they can be built from. Axes "
-            f"{', '.join(missing)}; sheet 00 ⟦SPLITS⟧ declares no ratio that closes the "
-            "gap, and the tool will not invent one"
+            f"{block.sheet_name!r} block {block.index}: the source reports none of the "
+            f"{len(targets)} target cell(s), neither margin, no segmentation and no "
+            f"{rule.total} — there is no level to build from, and the tool will not "
+            "invent one"
         )
 
-    from_total = all(p.labels is None for p in chosen)
+    out, notes = [], []
+    for record in records:
+        values = dict(record.values)
+        grid = _expand(record, kind, labels, bridge, occupancy)
+        for name, cell in _project(targets, axes, occupancy, bridge.covers).items():
+            values[name] = sum(grid.get(k, 0.0) for k in cell)
+        out.append(Record(record.source_ref, values, record.confidence))
+
+    notes.extend(_split_notes(kind, labels, bridge, targets, axes))
+    created = tuple(t for t in targets if t not in block.fields)
+    return out, created, notes, kind == "total", created
+
+
+def _expand(record, kind: str, labels, bridge, occupancy) -> dict:
+    """One record's amounts, spread over the section's occupancy × cover grid."""
+    if kind == "both":
+        occ_labels, cover_labels = labels
+        return fit_margins(
+            bridge.joint(), occupancy, bridge.covers,
+            {o: _amount(record, o) for o in occupancy},
+            {c: _amount(record, c) for c in bridge.covers},
+        ) if all(o in occ_labels for o in occupancy) else fit_margins(
+            bridge.joint(), occ_labels, cover_labels,
+            {o: _amount(record, o) for o in occ_labels},
+            {c: _amount(record, c) for c in cover_labels},
+        )
+
+    grid: dict = {}
+    for label in labels:
+        amount = _amount(record, label)
+        source = "total" if kind == "total" else kind
+        for cell, share in bridge.distribute(source, label).items():
+            grid[cell] = grid.get(cell, 0.0) + amount * share
+    return grid
+
+
+def _amount(record, field_name: str) -> float:
+    value = record.values.get(field_name)
+    return float(value) if isinstance(value, (int, float)) else 0.0
+
+
+def _project(targets, axes, occupancy, covers) -> dict:
+    """Target cell name → the grid keys it collects. Windstorm sums the cover axis out."""
+    out = {}
+    if len(axes) > 1:
+        for name in targets:
+            for o in occupancy:
+                for c in covers:
+                    if name == f"{o} {c}":
+                        out[name] = [(o, c)]
+    else:
+        for name in targets:
+            out[name] = [(name, c) for c in covers]
+    return out
+
+
+def _split_notes(kind, labels, bridge, targets, axes) -> list[str]:
+    told = {
+        "both": "both margins reported per zone, fitted to the grid from {src} so that "
+                "neither margin moves",
+        "occupancy": "occupancy reported per zone; the cover mix of each comes from {src}",
+        "cover": "cover reported per zone; the occupancy mix of each comes from {src} — "
+                 "which is why residential BI stays near nil rather than taking a flat share",
+        "segment": "reported as {shown}, translated onto the target cells through {src} "
+                   "and the declared occupancy convention",
+        "total": "one figure per zone, spread over the target cells by the joint "
+                 "distribution of {src}",
+    }[kind]
+    shown = ", ".join(labels if kind != "both" else labels[0] + labels[1])
+    notes = [
+        f"{len(targets)} target cell(s) built: "
+        + told.format(src=bridge.source, shown=shown)
+        + " (value-adding — an assumption about the zone, not about the book)"
+    ]
+    if kind == "segment" and bridge.conventions:
+        notes.append(
+            "occupancy of " + " and ".join(bridge.conventions)
+            + " is a declared convention in sheet 00 ⟦SPLITS⟧, not a reading — sheet 08 "
+              "cannot supply that edge"
+        )
+    if len(axes) == 1:
+        notes.append(
+            f"the cover axis is summed out: this dataset declares {axes[0].name} only, "
+            "but the cover figures still informed how the occupancy was worked out"
+        )
+    notes.append(
+        "the split redistributes and leaves every zone total unchanged"
+    )
+    return notes
+
+
+def _declared_split(block, spec, records, nomenclature, targets, axes):
+    """No 08 for this section — fall back to ratios typed into ⟦SPLITS⟧ — spec §2.6."""
+    rule = spec.split
+    if rule.total not in block.fields:
+        raise ExtractionError(
+            f"{block.sheet_name!r} block {block.index}: section {block.section!r} carries "
+            f"no 08 split table and the block reports no {rule.total}, so there is "
+            "nothing to build the target cells from"
+        )
+
+    shares, sources = {}, []
+    for name in targets:
+        factor, origin = 1.0, []
+        for axis, category in zip(axes, _cells_of(name, axes)):
+            declared = {r.category: r for r in
+                        nomenclature.splits_for(block.dataset.key, axis.name)}
+            if category not in declared:
+                raise ExtractionError(
+                    f"{block.sheet_name!r} block {block.index}: no 08 table and sheet 00 "
+                    f"⟦SPLITS⟧ declares no share for {category!r} on axis "
+                    f"{axis.name!r} — the tool will not invent one"
+                )
+            factor *= declared[category].share
+            if declared[category].source:
+                origin.append(declared[category].source)
+        shares[name] = factor
+        sources.extend(origin)
+
     out = []
     for record in records:
         values = dict(record.values)
-        for categories in _product(*(p.axis.categories for p in chosen)):
-            labels, factor = [], 1.0
-            for plan, category in zip(chosen, categories):
-                label, share = plan.mapping[category]
-                if label is not None:
-                    labels.append(label)
-                factor *= share
-            base = values.get(_base_field(labels, rule.total))
-            values[" ".join(categories)] = (
-                base * factor if isinstance(base, (int, float)) else None
-            )
+        base = _amount(record, rule.total)
+        for name, share in shares.items():
+            values[name] = base * share
         out.append(Record(record.source_ref, values, record.confidence))
 
-    notes = []
-    for plan in chosen:
-        if plan.kind == "reported":
-            continue
-        shares = ", ".join(f"{c} {plan.mapping[c][1]:.0%}" for c in plan.axis.categories)
-        origin = f" [{plan.source}]" if plan.source else ""
-        notes.append(
-            f"{plan.axis.name} not reported at this level, applied from sheet 00 "
-            f"⟦SPLITS⟧{origin}: {shares} (value-adding — an assumption, not a reading)"
-            if plan.kind == "declared" else
-            f"{plan.axis.name} arrived merged, re-split per sheet 00 ⟦SPLITS⟧{origin}: "
-            f"{shares} (value-adding)"
-        )
-    reported = [p.axis.name for p in chosen if p.kind == "reported"]
-    notes.append(
-        f"{len(buckets)} bucket(s) built from "
-        + (f"the reported {' and '.join(reported)} figures" if reported
-           else f"{rule.total} alone")
-        + " — the split redistributes and leaves every record total unchanged"
-    )
-    created = tuple(b for b in buckets if b not in block.fields)
-    assumed = created if any(p.kind != "reported" for p in chosen) else ()
-    return out, created, notes, from_total, assumed
+    origin = "; ".join(dict.fromkeys(sources))
+    created = tuple(t for t in targets if t not in block.fields)
+    return out, created, [
+        f"no 08 split table for section {block.section!r}; {len(targets)} target cell(s) "
+        f"built from ratios declared in sheet 00 ⟦SPLITS⟧"
+        + (f" [{origin}]" if origin else "")
+        + " (value-adding — an assumption, not a reading)",
+        "the split redistributes and leaves every zone total unchanged",
+    ], True, created
+
+
+def _cells_of(name: str, axes) -> list[str]:
+    """Split a target cell name back into one category per axis."""
+    if len(axes) == 1:
+        return [name]
+    for first in axes[0].categories:
+        if name.startswith(f"{first} ") and name[len(first) + 1:] in axes[1].categories:
+            return [first, name[len(first) + 1:]]
+    return [name]
 
 
 def _complete(block: Block, spec: Step2Spec, records, nomenclature, extra=()):
@@ -598,7 +669,7 @@ def apply_step2(block: Block, spec: Step2Spec, nomenclature=None, blocks=None) -
     # The split comes first: the identity has nothing to reconcile until the buckets
     # exist, and a zone added as 0 splits to zeros whichever way round it is done.
     source, split_fields, split_notes, from_total, assumed = _split(
-        block, spec, source, nomenclature)
+        block, spec, source, nomenclature, blocks)
     source, total_field, identity_note = _identity(block, spec, source,
                                                    nomenclature, from_total)
     derived_fields = bound_fields + split_fields + total_field

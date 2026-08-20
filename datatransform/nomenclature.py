@@ -135,6 +135,24 @@ class Nomenclature:
                      else tuple(f"{a} {b}" for a in names for b in axis.categories))
         return names
 
+    def segment_categories(self) -> tuple[str, ...]:
+        """Categories ⟦SPLITS⟧ maps *onto* an axis rather than within it — spec §2.6.
+
+        Projects and Renewables are not occupancy and not cover; they are a third way of
+        describing the same book, and the only thing that knows they exist is the
+        declared convention that maps them onto the occupancy axis.
+        """
+        return tuple(dict.fromkeys(
+            r.source_category for r in self.splits if r.source_category))
+
+    def cover_categories(self) -> tuple[str, ...]:
+        """The cover axis wherever it is declared — 07 targets occupancy only, but its
+        08 table may still carry the cover breakdown, and it is worth using."""
+        for axis in self.axes:
+            if len(axis.categories) and norm(axis.name).casefold() == "cover":
+                return tuple(axis.categories)
+        return ()
+
     def splits_for(self, dataset_key: str, axis: str, source_category: str = ""):
         """Declared ratios for one axis, most specific first — spec §2.6.
 

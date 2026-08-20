@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 from openpyxl import Workbook
+from openpyxl.utils import get_column_letter as col_letter
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -62,12 +63,21 @@ COVER = ["Building", "Content", "BI"]
 # has nine; windstorm declares occupancy alone, so it has three.
 BUCKETS = [f"{o} {c}" for o in OCCUPANCY for c in COVER]
 
-# Every bucket is optional in the *source*: step 2 builds the ones the cedent reports at
-# a coarser level from ⟦SPLITS⟧, so requiring them here would refuse a perfectly ordinary
-# submission. What is not optional is that some level arrives — a block carrying neither
-# the buckets nor a figure they can be built from is refused by the split itself.
-HEADERS_06 = ["Zone"] + [f"{b} (optional)" for b in BUCKETS] + ["Total (optional)"]
-HEADERS_07 = ["Zone"] + [f"{o} (optional)" for o in OCCUPANCY] + ["Total (optional)"]
+SEGMENTS = ["Projects", "Renewables"]
+
+# Every level the aggregate may arrive at is declared, and all of them are optional: the
+# register doubles as the list of shapes this dataset accepts. What is *not* optional is
+# that one of them turns up — a block reporting none is refused by the split itself.
+_LEVELS = [f"{o} (optional)" for o in OCCUPANCY] + \
+          [f"{c} (optional)" for c in COVER] + \
+          [f"{s} (optional)" for s in SEGMENTS] + ["Total (optional)"]
+HEADERS_06 = ["Zone"] + [f"{b} (optional)" for b in BUCKETS] + _LEVELS
+HEADERS_07 = ["Zone"] + _LEVELS
+
+# Sheet 08 — the cedent's own split table, one per section (§2.6).
+HEADERS_08 = ["Category"] + [f"{c} (optional)" for c in COVER] + ["Total (optional)"]
+ATTRS_08 = ["Section", "Currency", "Scale", "Share basis", "Exposure basis",
+            "Includes fac", "As at"]
 
 AXES = [
     ("06 EQ Aggs", "Occupancy", OCCUPANCY),
@@ -75,15 +85,31 @@ AXES = [
     ("07 Wind Aggs", "Occupancy", OCCUPANCY),
 ]
 
-# The cedent reports its hurricane aggregate as one figure per zone and gives the
-# occupancy split for the book as a whole; the 75/25 rule is ours, not theirs, and is
-# marked as such wherever it is applied.
+# Only the edges sheet 08 cannot supply. A cedent's split table gives every ratio
+# between occupancy and cover; what no cedent cross-tabulates is Projects/Renewables
+# against residential/commercial/industrial, and that a merged "Commercial" column
+# covers industrial risks too.
 SPLITS = [
-    ("07 Wind Aggs", "Occupancy", "", "Res", 0.38, "Cedent book split, 30.09.2025"),
-    ("07 Wind Aggs", "Occupancy", "", "Com", 0.42, "Cedent book split, 30.09.2025"),
-    ("07 Wind Aggs", "Occupancy", "", "Ind", 0.20, "Cedent book split, 30.09.2025"),
+    ("*", "Occupancy", "Renewables", "Ind", 1.00, "House convention"),
+    ("*", "Occupancy", "Projects", "Com", 0.50, "House convention"),
+    ("*", "Occupancy", "Projects", "Ind", 0.50, "House convention"),
     ("*", "Occupancy", "Commercial", "Com", 0.75, "House convention"),
     ("*", "Occupancy", "Commercial", "Ind", 0.25, "House convention"),
+]
+
+# ── sheet 08, per section ─────────────────────────────────────────────────────
+# The book's sums insured on the grid the cedent keeps. Only ratios are read from it, so
+# its scale and currency do not have to match 06/07 — only its own consistency matters.
+#                     Category  Building  Content     BI
+SPLIT_TABLE_EQ = [
+    ("Res",             41_200,  10_800,    1_640),
+    ("Com",             38_600,  11_900,    8_100),
+    ("Ind",             22_400,   7_050,    4_900),
+]
+SPLIT_TABLE_WIND = [
+    ("Res",             28_900,   7_600,    1_150),
+    ("Com",             31_400,   9_700,    6_600),
+    ("Ind",             15_100,   4_750,    3_300),
 ]
 
 ATTRS_06 = ["Section", "Currency", "Scale", "Share basis", "Exposure basis",
@@ -98,8 +124,10 @@ ATTRS_02 = ["Section", "Currency", "Scale", "Share basis", "Year basis",
             "Premium basis", "As at"]
 
 TYPES = [("Year", "text"), ("Premium", "number"), ("Incurred Losses", "number"),
-         ("EPI", "number"), ("Zone", "text"), ("Total", "number")] + \
-        [(b, "number") for b in BUCKETS] + [(o, "number") for o in OCCUPANCY]
+         ("EPI", "number"), ("Zone", "text"), ("Category", "text"),
+         ("Total", "number")] + \
+        [(b, "number") for b in BUCKETS] + [(o, "number") for o in OCCUPANCY] + \
+        [(c, "number") for c in COVER] + [(s, "number") for s in SEGMENTS]
 
 VOCABULARY = [
     ("Year basis", "UW | Occurrence"),
@@ -123,8 +151,8 @@ PERIOD_ORDER = [(1, "est"), (2, "9 months"), (3, "re-est"),
                 (4, "at inception"), (5, "at expiry")]
 
 SECTIONS = [
-    ("Earthquake", "cat", ["01", "02", "06"]),
-    ("Hurricane", "cat", ["01", "02", "07"]),
+    ("Earthquake", "cat", ["01", "02", "06", "08"]),
+    ("Hurricane", "cat", ["01", "02", "07", "08"]),
 ]
 
 # Scale 1,000,000 — the figures are millions of MXN.
@@ -234,11 +262,6 @@ def build_sheet00(wb):
     put(ws, "B3", "The header register runs D…P here rather than D…M: 06 declares eleven "
                   "headers, and row 4 is what says where the boundary falls.", sub_f)
 
-    # Row 4 declares the boundary; the reader locates it rather than assuming — §3.1.
-    for ref, text in [("B4", "Sheet name"), ("C4", "Key"),
-                      ("D4", "Headers  →"), ("Q4", "Attributes  →")]:
-        put(ws, ref, text, head_f, grey)
-
     datasets = [
         ("01. History EQ", "01 History EQ", HEADERS_01, ATTRS_01),
         ("01. History Wind", "01 History Wind", HEADERS_01, ATTRS_01),
@@ -246,7 +269,16 @@ def build_sheet00(wb):
         ("02. EPI Wind", "02 EPI Wind", HEADERS_02, ATTRS_02),
         ("06. EQ Aggs", "06 EQ Aggs", HEADERS_06, ATTRS_06),
         ("07. Wind Aggs", "07 Wind Aggs", HEADERS_07, ATTRS_06),
+        ("08. Splits EQ", "08 Splits EQ", HEADERS_08, ATTRS_08),
+        ("08. Splits Wind", "08 Splits Wind", HEADERS_08, ATTRS_08),
     ]
+    # Row 4 declares the boundary, and the boundary follows the widest register rather
+    # than a column somebody once picked — §3.1. 06 alone declares nineteen headers.
+    attr_col = 4 + max(len(headers) for _, _, headers, _ in datasets) + 1
+    for ref, text in [("B4", "Sheet name"), ("C4", "Key"), ("D4", "Headers  →")]:
+        put(ws, ref, text, head_f, grey)
+    put(ws, f"{col_letter(attr_col)}4", "Attributes  →", head_f, grey)
+
     row = 5
     for sheet_name, key, headers, attrs in datasets:
         put(ws, f"B{row}", sheet_name, body_f)
@@ -255,7 +287,7 @@ def build_sheet00(wb):
             cell = ws.cell(row=row, column=4 + i, value=h)
             cell.font, cell.fill = body_f, blue
         for i, a in enumerate(attrs):
-            cell = ws.cell(row=row, column=17 + i, value=a)
+            cell = ws.cell(row=row, column=attr_col + i, value=a)
             cell.font, cell.fill = body_f, yellow
         row += 1
 
@@ -344,10 +376,10 @@ def build_sheet00(wb):
         "equally good ones.", sub_f)
 
     widths(ws, {"A": 3, "B": 24, "C": 46, "D": 15})
-    for col in "EFGHIJKLMNOP":
-        ws.column_dimensions[col].width = 14
-    for col in "QRSTUVWXYZ":
-        ws.column_dimensions[col].width = 15
+    for col in range(5, attr_col):
+        ws.column_dimensions[col_letter(col)].width = 14
+    for col in range(attr_col, attr_col + 16):
+        ws.column_dimensions[col_letter(col)].width = 15
     return ws
 
 
@@ -411,6 +443,36 @@ def aggregate_sheet(wb, name, *, title, section, scheme, base, deductible, detai
     markers(ws, entries)
     widths(ws, {"A": 34, "B": 10, "N": 10, "O": 46})
     for col in value_cols:
+        ws.column_dimensions[col].width = 14
+    return ws
+
+
+# ══════════════════════════════════════════════════════════════════ sheet 08
+def split_sheet(wb, name, *, title, section, table):
+    """The cedent's own split table — the book, not the zones. Spec §2.6."""
+    ws = wb.create_sheet(name)
+    put(ws, "B1", title, title_f)
+    put(ws, "B2", "Sums insured for the whole book. 06/07 read only ratios from this, so "
+                  "its scale and currency need not match theirs — only its own "
+                  "consistency matters.", sub_f)
+    markers(ws, {
+        3: f"Section = {section}", 4: "Currency = MXN", 5: "Scale = 1,000,000",
+        6: "Share basis = 100%", 7: "Exposure basis = Sum Insured",
+        8: "Includes fac = yes", 9: "As at = 30.09.2025", 11: "Header_1", 16: "Info_1 = H",
+    })
+    rows = [{"B": category, "C": b, "D": c, "E": bi, "F": b + c + bi}
+            for category, b, c, bi in table]
+    record_block(
+        ws, header_row=11, selector_col="H",
+        source_labels={"B": "Ocupación", "C": "Edificio", "D": "Contenido",
+                       "E": "Pérdida de beneficios", "F": "Suma"},
+        declared={"B": "Category", "C": "Building", "D": "Content", "E": "BI",
+                  "F": "Total"},
+        rows=rows, formats={c: "#,##0" for c in "CDEF"}, note_col="I",
+        total_cols=list("CDEF"),
+    )
+    widths(ws, {"A": 26, "B": 14, "H": 10, "I": 44})
+    for col in "CDEF":
         ws.column_dimensions[col].width = 14
     return ws
 
@@ -481,6 +543,11 @@ def main():
               section="Earthquake", epi=[1_480, 1_134, 1_512, 1_648])
     epi_sheet(wb, "02. EPI Wind", title="02. EPI Projections — Hurricane",
               section="Hurricane", epi=[1_070, 823, 1_098, 1_180])
+
+    split_sheet(wb, "08. Splits EQ", title="08. Book split — Earthquake section",
+                section="Earthquake", table=SPLIT_TABLE_EQ)
+    split_sheet(wb, "08. Splits Wind", title="08. Book split — Hurricane section",
+                section="Hurricane", table=SPLIT_TABLE_WIND)
 
     aggregate_sheet(wb, "06. EQ Aggs", title="06. Earthquake aggregates — Mexico",
                     section="Earthquake", scheme="Mexico EQ", base=EQ_BASE,

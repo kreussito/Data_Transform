@@ -50,7 +50,7 @@ is written as a visible block with control sums that tie back to the step before
 | `05. Risk Profiles` | Banded exposure — the per-risk rating basis, §2.4 | **implemented** |
 | `06. EQ Aggs` | Earthquake sums insured per cat zone, §2.5 | **implemented** |
 | `07. Wind Aggs` | Windstorm sums insured per cat zone, §2.5 | **implemented** |
-| `08. Splits` | Occupancy × cover (Fire) or × Projects/Renewables (Engineering), §2.1 | axes settled, measures open |
+| `08. Splits` | The cedent's book split — sums insured, one block per section; the ratio source for `06`/`07`, §2.6 | **implemented** |
 | `09. Rate Development` | Rate change history — optional | outstanding |
 | `10. Triangles` | Loss development triangles | outstanding |
 | `11. Exchange rates` | FX rates for conversion between currencies | outstanding |
@@ -353,100 +353,128 @@ premium movement — which is §10.4.
 and the covered books need not be the same, so a comparison between them would fail on
 perfectly ordinary submissions.
 
-### 2.6 Splits — what to do when the buckets do not arrive
+### 2.6 Splits — from what the cedent reported onto the target cells
 
-A cedent reports at whatever level it keeps its book. Sometimes the finished grid comes,
-sometimes one figure per zone, sometimes a cover split with no occupancy in it. The
-buckets still have to be produced, because that is what a cat model is fed.
+A cat model wants sums insured on a **fixed** grid: occupancy × cover for earthquake —
+`Res Building` … `Ind BI` — and occupancy alone for windstorm. That target does not
+change with the line of business. What changes is what arrives.
 
-**The buckets are the product of the declared axes.** That one sentence covers four
-tables that would otherwise be four special cases:
-
-| Dataset | Axis 1 — occupancy | Axis 2 — cover | Buckets |
-|---|---|---|---|
-| `06` Earthquake | Res · Com · Ind | Building · Content · BI | **9** |
-| `08` Fire | Res · Com · Ind | Building · Content · BI | **9** |
-| `08` Engineering | Res · Com · Ind | Projects · Renewables | **6** |
-| `07` Windstorm | Res · Com · Ind | — | **3** |
-
-Windstorm is not an exception; it is the product of a single axis. The axes are declared
-in `⟦AXES⟧` (§3.3) and the bucket names are built by joining the categories, so the names
-the arithmetic produces are the names the register declares and the two cannot drift.
-
-#### One rule, three situations
-
-Each axis is satisfied in one of three ways, and they share a shape — a category maps to
-the label it comes from and the factor to apply:
-
-| | Example | |
+| Dataset | Target cells | |
 |---|---|---|
-| **reported** | `Res → (Res, 1.0)` | the block names it; nothing to do |
-| **merged** | `Ind → (Commercial, 0.25)` | it arrived folded into another category |
-| **declared** | `Ind → (—, 0.20)` | the block is silent; the whole axis is multiplied on |
+| `06` Earthquake | 9 | Res · Com · Ind × Building · Content · BI |
+| `07` Windstorm | 3 | Res · Com · Ind |
 
-So the arithmetic is always the same: for every combination of categories, take the
-reported figure it comes from and multiply by the factors of the axes that were not
-reported.
+**The measure is sums insured**, however they are interpreted — the interpretation
+attributes (`Coinsurance`, `Deductible`, `Limit basis`, `Multi-location`) stay on `06`/`07`
+where the figures are, and say what those sums mean.
 
-```
-zone reports Total only        →  Total × occupancy_i × cover_j
-zone reports Building/…/BI     →  Building_j × occupancy_i      (cover left untouched)
-zone reports Res/Com/Ind       →  Res_i × cover_j
-zone reports the full grid     →  nothing
-```
+#### The bridge
 
-**A reported margin is never overwritten.** Where the cedent gives the cover split, those
-three figures come out exactly as sent and only the occupancy axis is added. That is the
-property that makes the whole thing defensible: the tool adds the dimension the cedent
-was silent about, and nothing else.
-
-**A split redistributes; it never creates.** Every record's total is unchanged, so the
-control sums tie and §10.4 reads the same figures whether or not a split ran. Splitting
-is value-adding in *detail* and value-preserving in *sum* — an unusual combination, and
-worth stating because it is what stops an assumption from corrupting the rate analysis.
-
-#### Where the ratios come from, and why that is recorded
-
-The cedent supplies the split **for the whole book**, not per zone. Applying a book-level
-ratio to each zone assumes every zone has the book's occupancy mix, which is false —
-Mexico City is not a coastal resort zone — and false exactly where it matters most, in
-the high-hazard zones a model is most sensitive to. Two things follow.
-
-First, a **control worth having**: because every zone is multiplied by the same shares,
-the bucket totals over all zones reproduce the cedent's declared split exactly. The
-distribution *between* zones is the assumption; the split *of the book* is not. A reader
-can be told precisely which half of the statement to trust.
-
-Second, the ratio's **origin is itself information**. An underwriter may take a split from
-the cedent's prior submission, or from another book of the same type. Both are
-assumptions; they are not equally good ones. So `⟦SPLITS⟧` carries a `Source` column, and
-every note names it:
+The operation is not "multiply the missing axis on". It is a map from each reported
+category onto a distribution over the target cells:
 
 ```
-· Occupancy not reported at this level, applied from sheet 00 ⟦SPLITS⟧
-  [Cedent book split, 30.09.2025]: Res 38%, Com 42%, Ind 20%
-  (value-adding — an assumption, not a reading)
+B(z, t) = Σₐ  S(z, a) · M(a → t)          with   Σₜ M(a → t) = 1
 ```
 
-The block's confidence follows: a block whose columns rest on a declared ratio can no
-longer read `Confirmed`, whatever step 1 said (§5.3).
+Every case is that one formula:
 
-#### What it will not do
+| The zone reports | `M` is | |
+|---|---|---|
+| one figure | the joint distribution `p(i,j)` | case a) |
+| occupancy | `p(j\|i)`, zero outside the row | case b) |
+| cover | `p(i\|j)`, zero outside the column | case c) |
+| **Projects / Renewables** | `q(i\|a) · p(j\|a)` — no zeros | the third axis |
+| occupancy **and** cover | fitted to both margins — see below | |
+
+The zeros are why a reported figure survives untouched: the row sums to exactly what
+arrived. The segment axis has no zeros, and that is precisely what distinguishes it — it
+is a *translation between two descriptions of the same book*, not a refinement of one
+axis into another.
+
+Two steps, kept apart on purpose: **expand** what arrived onto the section's full
+occupancy × cover grid, then **project** that grid onto the axes the dataset declares.
+Earthquake declares both, so nothing is projected away. Windstorm declares occupancy
+alone, so the cover axis is summed out — but the reported cover figures still shaped the
+answer rather than being discarded, which is why a BI-heavy zone comes out less
+residential than the book average.
+
+#### Sheet 08 supplies `M`, one per section
+
+`08` is the cedent's own split table: the book's sums insured on whatever grid it keeps,
+**one block per section**, because an earthquake book and a hurricane book need not be
+the same. It is a dataset in its own right — it gets both steps, it is sorted, its `Total`
+is reconciled against its parts (S19) — *and* it is where `06`/`07` read their ratios.
+
+Two properties fall out of taking ratios from amounts rather than from typed percentages:
+
+- **They cannot fail to close.** A share derived from sums insured sums to 1 by
+  construction; a typed `38% / 42% / 20%` can be mistyped and has to be checked.
+- **`08`'s scale and currency are irrelevant.** Only ratios are read, so `08` need not
+  agree with `06`/`07` on either — only with itself.
+
+And the map knows something a single occupancy vector could not: **the occupancy mix
+differs by cover**. Residential BI is nearly nil, so `p(Res|BI)` is small where
+`p(Res|Building)` is large. Applying one occupancy vector to all three covers would
+invent residential business interruption.
+
+#### Two reported margins: neither may move
+
+Where a zone reports occupancy *and* cover as two vectors, conditioning on one preserves
+that one and lets the other drift. Both were reported, so neither may move. The grid from
+`08` is used as a seed and scaled alternately to the row and column totals until it
+satisfies both (iterative proportional fitting). **The seed decides only how the two
+margins interact**; the margins themselves come out exactly as sent.
+
+#### The one edge no cedent supplies
+
+`q(i|segment)` — Projects and Renewables against residential/commercial/industrial.
+Nobody cross-tabulates that way, so it is a declared convention in `⟦SPLITS⟧`:
+
+| From | To | Share | Source |
+|---|---|---|---|
+| `Renewables` | `Ind` | 100% | House convention |
+| `Projects` | `Com` | 50% | House convention |
+| `Projects` | `Ind` | 50% | House convention |
+| `Commercial` | `Com` · `Ind` | 75% · 25% | House convention |
+
+Wind farms and solar fields are industrial risks; a project is half commercial and half
+industrial. Residential comes out at nil, which is right — there is no residential
+engineering. Every note that applies one of these says so and names the source, and the
+block's confidence drops to `Assumed` (§5.3).
+
+`⟦SPLITS⟧` therefore holds only what is *our* judgement. Everything the cedent supplies
+comes from `08` and carries provenance. Where a section has no `08` at all, `⟦SPLITS⟧` may
+also carry a fallback ratio — last year's, or another client's — and it is written into
+the block as an assumption with its origin named.
+
+#### What it refuses
+
+**A reported column the bridge does not consume is never dropped in silence.** Two
+columns describing the same book on different axes is not a level the tool can read, and
+quietly using one while discarding the other would lose money without leaving a trace.
+So it refuses and names the column.
 
 **Splitting happens inside a zone, never across zones.** An occupancy mix is a property
 of the portfolio and transfers plausibly; the geographic distribution *is* the analysis,
-and assuming it would be inventing the answer. A `06`/`07` block without `Zone` is
-therefore refused, not completed.
+and assuming it would be inventing the answer. A block without `Zone` is refused.
 
-A block reporting neither the buckets nor a level they can be built from is refused, and
-says which axes it could not satisfy. Shares that do not sum to 100% are fatal — that is
-a typo, not an underwriting view — as are negative shares.
+Also refused: a block reporting no level at all; an `08` carrying nothing under a cover
+the block reports, rather than spreading it evenly and calling that an answer; and a
+segment with no declared mapping.
 
-**Two vectors are not a grid.** Where the book split arrives as an occupancy vector and a
-cover vector, multiplying them assumes the axes are independent. It shows up at
-`Res BI`: the product gives residential business interruption a share it barely has in
-reality, taken from the commercial cells. Where the cedent supplies the full grid instead,
-it is used directly and the question does not arise. The mechanism accepts both.
+#### What is assumption and what is not
+
+Applying a book-level ratio to each zone assumes every zone has the book's mix. That is
+false — Mexico City is not a coastal resort zone — and false exactly where a model is
+most sensitive. But because every zone is multiplied by the same shares, **the cell
+totals over all zones reproduce the cedent's own split exactly**. The distribution
+*between* zones is the assumption; the split *of the book* is not, and a reader can be
+told precisely which half to trust.
+
+A split redistributes and never creates: the zone total is unchanged, so control sums tie
+and §10.4 reads the same figures whether or not a split ran. Value-adding in detail,
+value-preserving in sum.
 
 ---
 
@@ -1072,7 +1100,7 @@ sums tying back to step 1.
 | **S17** | A dataset may declare **cumulative** columns: a running share of a measure's total | value-adding |
 | **S18** | A dataset may declare its key **complete** against a catalogue in `00`. Keys the source omits are written with every measure at 0 | value-preserving |
 | **S19** | A dataset may declare a field as the **identity** of others: supplied, it is checked against them and the verdict recorded; absent, it is derived as their sum | check / value-adding |
-| **S20** | A dataset may declare **split axes**. Its buckets are their product, and a source reporting at a coarser level is expanded using ratios declared in `⟦SPLITS⟧` | value-adding in detail, value-preserving in sum |
+| **S20** | A dataset may declare **target cells**. A source reporting on any other axis is bridged onto them using ratios read from `08`, or declared in `⟦SPLITS⟧` where no cedent can supply them | value-adding in detail, value-preserving in sum |
 
 **S14.** `03. Large Losses` emits the claim detail and then, beneath it, the annual sum:
 
