@@ -39,18 +39,28 @@ OK, WARNING, NO_BASIS = "within limits", "WARNING", "no basis"
 PERCENT = re.compile(r"^\s*([0-9.,]+)\s*%\s*$")
 
 
-def threshold_of(nomenclature) -> float:
-    """Declared in ⟦GLOBAL⟧ — the underwriter's number, not the tool's."""
-    raw = (getattr(nomenclature, "globals", None) or {}).get(THRESHOLD_ATTRIBUTE)
+def _read_share(nomenclature, attribute: str, default: float) -> float:
+    """One ⟦GLOBAL⟧ share, read the same way wherever it is used.
+
+    ``20%``, ``20`` and ``0.2`` all mean twenty per cent: a share above 1 can only have
+    been meant as a percentage. Shared by the three declared thresholds so they cannot
+    drift into reading their own numbers differently.
+    """
+    raw = (getattr(nomenclature, "globals", None) or {}).get(attribute)
     if raw is None or norm(raw) == "":
-        return DEFAULT_THRESHOLD
+        return default
     text = norm(raw)
     percent = PERCENT.match(text)
     try:
         value = float((percent.group(1) if percent else text).replace(",", ""))
     except ValueError:
-        return DEFAULT_THRESHOLD
+        return default
     return value / 100.0 if (percent or value > 1) else value
+
+
+def threshold_of(nomenclature) -> float:
+    """Declared in ⟦GLOBAL⟧ — the underwriter's number, not the tool's."""
+    return _read_share(nomenclature, THRESHOLD_ATTRIBUTE, DEFAULT_THRESHOLD)
 
 
 @dataclass
@@ -75,6 +85,7 @@ class GrowthTable:
     premium_from: tuple[str, float] | None = None      # (label, value) in year N
     premium_to: tuple[str, float] | None = None        # (label, value) in year N+1
     skipped: str = ""
+    note: str = ""                                     # ordering the reader should check
 
     @property
     def title(self) -> str:
@@ -106,6 +117,24 @@ class GrowthTable:
         if rate is None:
             return NO_BASIS
         return WARNING if abs(rate) > self.threshold else OK
+
+
+def _undeclared_suffixes(versions, order) -> list[str]:
+    """Suffixes ⟦PERIOD ORDER⟧ does not rank — spec §9.2 S13.
+
+    An unranked suffix sorts last, and two of them sort alphabetically against each
+    other. That is a defensible default for a table nobody reads in order, but §10.4
+    measures growth from the *first* version to the *last*: get the sequence wrong and
+    the span is wrong, silently and plausibly. So it is said out loud.
+    """
+    ranked = {norm(s).casefold() for s in order}
+    out = []
+    for block in versions:
+        label = _period_of(block)
+        suffix = label.split(" ", 1)[1] if " " in label else ""
+        if suffix and norm(suffix).casefold() not in ranked:
+            out.append(suffix)
+    return sorted(dict.fromkeys(out))
 
 
 def _period_of(block) -> str:
@@ -144,6 +173,14 @@ def growth_tables(nomenclature, blocks, results=None) -> list[GrowthTable]:
                 sheets=tuple(dict.fromkeys(b.sheet_name for b in versions)),
                 threshold=threshold,
             )
+
+            undeclared = _undeclared_suffixes(versions, order)
+            if undeclared:
+                table.note = (
+                    f"the suffix(es) {', '.join(undeclared)} have no rank in "
+                    "⟦PERIOD ORDER⟧, so the versions were ordered alphabetically — "
+                    "declare them if that is not the intended sequence"
+                )
 
             unlabelled = [b for b in versions if not _period_of(b)]
             if unlabelled:

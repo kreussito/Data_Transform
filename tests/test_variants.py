@@ -31,8 +31,10 @@ COMBINED = ROOT / "Intake_EngineeringCombined_v1.xlsx"
 FIRE_CAT = ROOT / "Intake_FireCat_v1.xlsx"
 FIRE_EQ_WIND = ROOT / "Intake_FireEQWind_v1.xlsx"
 FIRE_CAT_LOSSES = ROOT / "Intake_FireCatLosses_v1.xlsx"
+FIRE_CAT_FULL = ROOT / "Intake_FireCatFull_v1.xlsx"
 
-ALL = [FIRE, ENGINEERING, FIRE_CAT, FIRE_EQ_WIND, COMBINED, FIRE_CAT_LOSSES]
+ALL = [FIRE, ENGINEERING, FIRE_CAT, FIRE_EQ_WIND, COMBINED, FIRE_CAT_LOSSES,
+       FIRE_CAT_FULL]
 
 
 def _blocks(path):
@@ -664,3 +666,91 @@ def test_the_fire_section_gets_no_loss_share_block_at_all(tmp_path):
 
     assert not has_block("01. History Fire")
     assert has_block("01. History EQ") and has_block("01. History Wind")
+
+
+# ═════════════════ the complete Fire + Nat Cat treaty — every dataset 01 … 08
+
+FULL = ROOT / "Intake_FireCatFull_v1.xlsx"
+
+
+def test_the_complete_pack_carries_all_eight_datasets():
+    nomenclature, blocks = _blocks(FULL)
+    roles = {b.dataset.role for b in blocks}
+    assert roles == {"01", "02", "03", "04", "05", "06", "07", "08"}
+    assert {s.name for s in nomenclature.sections} == {"Fire", "Earthquake", "Windstorm"}
+
+
+def test_each_section_has_its_own_split_table():
+    _, blocks = _blocks(FULL)
+    assert {b.section for b in blocks if b.dataset.role == "08"} == {
+        "Fire", "Earthquake", "Windstorm"}
+
+
+def test_the_two_halves_of_the_bridge_meet_on_one_workbook():
+    """Earthquake reports cover only, windstorm one figure per zone — §2.6 c) and a)."""
+    _, blocks = _blocks(FULL)
+    eq = next(b for b in blocks if b.dataset.role == "06")
+    wind = next(b for b in blocks if b.dataset.role == "07")
+
+    assert eq.fields == ("Zone", "Building", "Content", "BI")
+    assert wind.fields == ("Zone", "Total")
+
+
+def test_the_reported_cover_margin_comes_out_of_step_2_untouched():
+    nomenclature, blocks = _blocks(FULL)
+    block = next(b for b in blocks if b.dataset.role == "06")
+    result = apply_step2(block, step2_for(block.dataset.key), nomenclature, blocks)
+
+    for record in result.records[:5]:
+        for cover in ("Building", "Content", "BI"):
+            parts = sum(record.values[f"{o} {cover}"] for o in ("Res", "Com", "Ind"))
+            assert parts == pytest.approx(record.values[cover])
+
+
+def test_both_loss_share_groups_appear_on_the_same_workbook():
+    """A per-risk group and a cat group, each summed over its own sections — §10.3."""
+    from datatransform.lossshare import loss_share_tables
+
+    nomenclature, blocks = _blocks(FULL)
+    tables = {t.kind: t for t in loss_share_tables(nomenclature, blocks)}
+    assert set(tables) == {"per risk", "cat"}
+    assert tables["per risk"].sections == ("Fire",)
+    assert set(tables["cat"].sections) == {"Earthquake", "Windstorm"}
+
+
+def test_the_versions_are_ordered_by_the_declared_ranks_not_alphabetically():
+    """'at expiry' sorts before 'at inception' in the alphabet. Growth is measured from
+    the first version to the last, so the wrong sequence is a wrong answer — §9.2 S13."""
+    from datatransform.growth import growth_tables
+
+    nomenclature, blocks = _blocks(FULL)
+    # 06 reports no Total of its own — it is derived in step 2, so that is where the
+    # exposure has to be read from, exactly as the runner does it.
+    results = [apply_step2(b, step2_for(b.dataset.key), nomenclature, blocks)
+               for b in blocks if step2_for(b.dataset.key)]
+    tables = {t.section: t for t in growth_tables(nomenclature, blocks, results)}
+    for section in ("Earthquake", "Windstorm"):
+        assert [v.period for v in tables[section].versions] == [
+            "2025 9 months", "2026 at inception", "2026 at expiry"]
+        assert not tables[section].note
+        assert tables[section].exposure_growth == pytest.approx(0.128, abs=0.001)
+
+
+def test_an_unranked_suffix_is_named_rather_than_silently_ordered():
+    from datatransform.growth import growth_tables
+
+    nomenclature, blocks = _blocks(FULL)
+    nomenclature.period_order = {"est": 1, "9 months": 2, "re-est": 3}
+    table = {t.section: t for t in growth_tables(nomenclature, blocks)}["Earthquake"]
+    assert "at expiry" in table.note and "at inception" in table.note
+    assert "ordered alphabetically" in table.note
+
+
+def test_the_complete_pack_runs_clean(tmp_path):
+    source = tmp_path / FULL.name
+    shutil.copy2(FULL, source)
+    report = run(source, tmp_path / "out.xlsx", tmp_path / "logs")
+    assert report.ok, [o.detail for o in report.outcomes if o.status == "error"]
+    assert report.rules_ok
+    assert len(report.growth) == 2
+    assert len({o.sheet for o in report.outcomes if o.status == "processed"}) == 15

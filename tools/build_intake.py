@@ -25,11 +25,14 @@ from datetime import date
 from pathlib import Path
 
 from openpyxl import Workbook
+from openpyxl.utils import get_column_letter as col_letter
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sheets import (  # noqa: E402
+    ATTRS_06, ATTRS_08, BUCKETS, COVER, HEADERS_06, HEADERS_07, HEADERS_08,
+    OCCUPANCY, SEGMENTS, aggregate_sheet, check_catalogue, split_sheet,
     block_header,
     blue,
     body_f,
@@ -93,7 +96,11 @@ VOCABULARY = [
     ("Currency", "ISO 4217"),
 ]
 
-PERIOD_ORDER = [(1, "est"), (2, "9 months"), (3, "re-est")]
+# Ranks 4 and 5 order the three versions of a cat aggregate. A pack without aggregates
+# never uses them; a pack *with* aggregates that omits them sorts "at expiry" before
+# "at inception" alphabetically and measures the growth over the wrong span — spec §9.2 S13.
+PERIOD_ORDER = [(1, "est"), (2, "9 months"), (3, "re-est"),
+                (4, "at inception"), (5, "at expiry")]
 
 MARKER_LEGEND = [
     ("Header_i", "row-wise: this row is block i's extraction row (declared labels only)"),
@@ -146,7 +153,9 @@ PROVISIONAL: list = []
 
 
 # ══════════════════════════════════════════════════════════════ sheet 00
-def build_sheet00(wb, *, treaty_type, sections, datasets, rules=RULES, full_key_rules=None):
+def build_sheet00(wb, *, treaty_type, sections, datasets, rules=RULES,
+                  full_key_rules=None, types=None, vocabulary=None,
+                  zones=None, axes=None, splits=None, extra_globals=()):
     ws = wb.create_sheet("00. NC+Interdep", 0)
 
     put(ws, "B1", "00. Nomenclature & Interdependencies", title_f)
@@ -154,9 +163,10 @@ def build_sheet00(wb, *, treaty_type, sections, datasets, rules=RULES, full_key_
                   "Column A is intentionally empty — no markers in this sheet.", sub_f)
     put(ws, "B3", "Greyed rows are declared but not yet implemented end to end.", sub_f)
 
-    for ref, text in [("B4", "Sheet name"), ("C4", "Key"),
-                      ("D4", "Headers  →"), ("N4", "Attributes  →")]:
+    attr_col = max(14, 4 + max(len(h) for _, _, h, _ in datasets) + 1)
+    for ref, text in [("B4", "Sheet name"), ("C4", "Key"), ("D4", "Headers  →")]:
         put(ws, ref, text, head_f, grey)
+    put(ws, f"{col_letter(attr_col)}4", "Attributes  →", head_f, grey)
 
     row = 5
     for sheet_name, key, headers, attrs in datasets:
@@ -165,8 +175,8 @@ def build_sheet00(wb, *, treaty_type, sections, datasets, rules=RULES, full_key_
         for i, h in enumerate(headers):
             put(ws, f"{chr(68 + i)}{row}", h, body_f, blue)
         for i, a in enumerate(attrs):
-            ws.cell(row=row, column=14 + i, value=a).fill = yellow
-            ws.cell(row=row, column=14 + i).font = body_f
+            ws.cell(row=row, column=attr_col + i, value=a).fill = yellow
+            ws.cell(row=row, column=attr_col + i).font = body_f
         row += 1
     for sheet_name, key, headers, attrs in PROVISIONAL:
         put(ws, f"B{row}", sheet_name, prov_f)
@@ -174,7 +184,7 @@ def build_sheet00(wb, *, treaty_type, sections, datasets, rules=RULES, full_key_
         for i, h in enumerate(headers):
             put(ws, f"{chr(68 + i)}{row}", h, prov_f)
         for i, a in enumerate(attrs):
-            ws.cell(row=row, column=14 + i, value=a).font = prov_f
+            ws.cell(row=row, column=attr_col + i, value=a).font = prov_f
         row += 1
 
     # ── ⟦INVENTORY⟧ — every dataset the standard defines, 01 … 11
@@ -198,7 +208,8 @@ def build_sheet00(wb, *, treaty_type, sections, datasets, rules=RULES, full_key_
     for name, value, fmt in [("Actual year", 2025, "0"),
                              ("Treaty type", treaty_type, None),
                              ("Cedent", "Example Insurance SA", None),
-                             ("Loss share warning", 0.20, "0%")]:
+                             ("Loss share warning", 0.20, "0%"),
+                             *extra_globals]:
         put(ws, f"B{r}", name, body_f)
         put(ws, f"C{r}", value, body_f, yellow, fmt=fmt)
         r += 1
@@ -207,9 +218,46 @@ def build_sheet00(wb, *, treaty_type, sections, datasets, rules=RULES, full_key_
                          "the sheet. Loss share warning is the point above which a "
                          "year's declared losses are flagged (§10.3).", sub_f)
 
+    # ── ⟦ZONES⟧ · ⟦AXES⟧ · ⟦SPLITS⟧ — only where the pack carries 06/07/08
+    if zones:
+        r = block_header(ws, r + 3, "⟦ZONES⟧", ["Scheme", "Zones"])
+        for scheme, codes in zones:
+            put(ws, f"B{r}", scheme, body_f, yellow)
+            put(ws, f"C{r}", ", ".join(codes), body_f)
+            r += 1
+        put(ws, f"B{r + 1}", "The complete zoning. Zones the cedent does not list are "
+                             "shown as 0 — absent reads as 'no data', zero reads as "
+                             "'nothing there'.", sub_f)
+        r += 2
+    if axes:
+        r = block_header(ws, r + 1, "⟦AXES⟧", ["Dataset", "Axis", "Categories"])
+        for dataset, axis, categories in axes:
+            put(ws, f"B{r}", dataset, body_f)
+            put(ws, f"C{r}", axis, body_f, blue)
+            put(ws, f"D{r}", ", ".join(categories), body_f)
+            r += 1
+        put(ws, f"B{r + 1}", "The target cells of a dataset are the product of its axes. "
+                             "Found by position, not by name — renaming one changes no "
+                             "code (§2.6).", sub_f)
+        r += 2
+    if splits:
+        r = block_header(ws, r + 1, "⟦SPLITS⟧",
+                         ["Dataset", "Axis", "From", "Category", "Share", "Source"])
+        for dataset, axis, frm, category, share, origin in splits:
+            put(ws, f"B{r}", dataset, body_f)
+            put(ws, f"C{r}", axis, body_f, blue)
+            put(ws, f"D{r}", frm, body_f)
+            put(ws, f"E{r}", category, body_f)
+            put(ws, f"F{r}", share, body_f, yellow, fmt="0%")
+            put(ws, f"G{r}", origin, body_f)
+            r += 1
+        put(ws, f"B{r + 1}", "Only what is our judgement. Everything the cedent supplies "
+                             "comes from 08 and carries its own provenance.", sub_f)
+        r += 2
+
     # ── ⟦TYPES⟧
     r = block_header(ws, r + 3, "⟦TYPES⟧", ["Field", "Type"])
-    for name, kind in TYPES:
+    for name, kind in (types or TYPES):
         put(ws, f"B{r}", name, body_f)
         put(ws, f"C{r}", kind, body_f, blue)
         r += 1
@@ -1093,11 +1141,162 @@ def build_fire_cat_losses():
     return wb, "Intake_FireCatLosses_v1.xlsx"
 
 
+# ═══════════════════════════════ the complete Fire + Nat Cat treaty
+#
+# Everything at once: three sections, eight datasets, the whole chain from history to
+# aggregates. It exists because the pieces have only ever been exercised apart — and
+# because §10.3's two groups, §10.4's two growth tables and §2.6's split all have to
+# coexist on one workbook without treading on each other.
+
+# A small European zoning, with one sub-zoned pair so the natural sort has something to
+# do. Complete tables: every zone is listed, silent ones at 0 (§2.5).
+EU_EQ_ZONES = [str(z) for z in range(1, 9)] + ["9a", "9b"] + \
+              [str(z) for z in range(10, 13)]
+EU_WIND_ZONES = [str(z) for z in range(1, 9)]
+
+#                 zone     size   mix
+EU_EQ_BASE = [
+    ("1",       18_400, "com"), ("2",    9_250, "res"), ("3",   4_120, "res"),
+    ("4",           0,  "res"), ("5",   12_800, "ind"), ("6",   6_540, "mix"),
+    ("7",        3_180, "res"), ("8",   21_600, "com"),
+    ("9a",      14_950, "com"), ("9b",   7_310, "mix"),
+    ("10",       2_470, "res"), ("11",   5_890, "ind"), ("12",      0, "res"),
+]
+EU_WIND_BASE = [
+    ("1",       11_200, "res"), ("2",   24_800, "com"), ("3",   6_130, "mix"),
+    ("4",        3_940, "res"), ("5",        0, "res"), ("6",  17_350, "com"),
+    ("7",        8_620, "ind"), ("8",    5_270, "res"),
+]
+
+SPLIT_TABLE_EQ = [("Res", 38_400, 9_900, 1_480),
+                  ("Com", 44_100, 13_600, 9_350),
+                  ("Ind", 26_800, 8_400, 5_900)]
+SPLIT_TABLE_WIND = [("Res", 31_200, 8_150, 1_240),
+                    ("Com", 36_700, 11_300, 7_800),
+                    ("Ind", 14_600, 4_600, 3_150)]
+SPLIT_TABLE_FIRE = [("Res", 52_800, 13_700, 2_050),
+                    ("Com", 47_300, 14_600, 10_100),
+                    ("Ind", 29_400, 9_200, 6_450)]
+
+FULL_AXES = [
+    ("06 EQ Aggs", "Occupancy", OCCUPANCY),
+    ("06 EQ Aggs", "Cover", COVER),
+    ("07 Wind Aggs", "Occupancy", OCCUPANCY),
+]
+FULL_SPLITS = [
+    ("*", "Occupancy", "Renewables", "Ind", 1.00, "House convention"),
+    ("*", "Occupancy", "Projects", "Com", 0.50, "House convention"),
+    ("*", "Occupancy", "Projects", "Ind", 0.50, "House convention"),
+    ("*", "Occupancy", "Commercial", "Com", 0.75, "House convention"),
+    ("*", "Occupancy", "Commercial", "Ind", 0.25, "House convention"),
+]
+
+
+def build_fire_cat_full():
+    """Fire + Earthquake + Windstorm, every dataset 01 … 08."""
+    check_catalogue(EU_EQ_BASE, EU_EQ_ZONES, "EU_EQ_BASE")
+    check_catalogue(EU_WIND_BASE, EU_WIND_ZONES, "EU_WIND_BASE")
+
+    wb = Workbook()
+    wb.remove(wb.active)
+    sections = [
+        ("Fire", "per risk", ["01", "02", "03", "05", "08"]),
+        ("Earthquake", "cat", ["01", "02", "04", "06", "08"]),
+        ("Windstorm", "cat", ["01", "02", "04", "07", "08"]),
+    ]
+    datasets = [
+        ("01. History Fire", "01 History Fire", HEADERS_01, ATTRS_01),
+        ("01. History EQ", "01 History EQ", HEADERS_01, ATTRS_01),
+        ("01. History Wind", "01 History Wind", HEADERS_01, ATTRS_01),
+        ("02. EPI Fire", "02 EPI Fire", HEADERS_02, ATTRS_02),
+        ("02. EPI EQ", "02 EPI EQ", HEADERS_02, ATTRS_02),
+        ("02. EPI Wind", "02 EPI Wind", HEADERS_02, ATTRS_02),
+        ("03. Large Losses Fire", "03 Large Fire", HEADERS_03, ATTRS_03),
+        ("04. Cat Losses EQ", "04 Cat EQ", HEADERS_04, ATTRS_04),
+        ("04. Cat Losses Wind", "04 Cat Wind", HEADERS_04, ATTRS_04),
+        ("05. Risk Profiles Fire", "05 Profile Fire", HEADERS_05, ATTRS_05),
+        ("06. EQ Aggs", "06 EQ Aggs", HEADERS_06, ATTRS_06),
+        ("07. Wind Aggs", "07 Wind Aggs", HEADERS_07, ATTRS_06),
+        ("08. Splits Fire", "08 Splits Fire", HEADERS_08, ATTRS_08),
+        ("08. Splits EQ", "08 Splits EQ", HEADERS_08, ATTRS_08),
+        ("08. Splits Wind", "08 Splits Wind", HEADERS_08, ATTRS_08),
+    ]
+    types = TYPES + [("Zone", "text"), ("Category", "text"), ("Total", "number")] + \
+        [(b, "number") for b in BUCKETS] + [(o, "number") for o in OCCUPANCY] + \
+        [(c, "number") for c in COVER] + [(s, "number") for s in SEGMENTS]
+    vocabulary = VOCABULARY + [
+        ("Zone scheme", "EU EQ | EU Wind"),
+        ("Coinsurance", "deducted | not deducted"),
+        ("Deductible", "deducted | not deducted"),
+        ("Limit basis", "full sum insured | per risk limit | per location limit"),
+        ("Multi-location",
+         "split by location | allocated to main zone | duplicated in each zone"),
+    ]
+    build_sheet00(
+        wb, treaty_type="Fire + Nat Cat, complete", sections=sections,
+        datasets=datasets, types=types, vocabulary=vocabulary,
+        zones=[("EU EQ", EU_EQ_ZONES), ("EU Wind", EU_WIND_ZONES)],
+        axes=FULL_AXES, splits=FULL_SPLITS,
+        extra_globals=[("Rate change warning", 0.20, "0%"),
+                       ("Split view warning", 0.02, "0%")],
+    )
+
+    history_sheet(wb, "01. History Fire", section="Fire",
+                  title="01. History — Fire section", **FIRE_HISTORY)
+    history_sheet(wb, "01. History EQ", section="Earthquake",
+                  title="01. History — Earthquake section", **EQ_HISTORY)
+    history_sheet(wb, "01. History Wind", section="Windstorm",
+                  title="01. History — Windstorm section", **WIND_HISTORY)
+
+    epi_sheet(wb, "02. EPI Fire", section="Fire",
+              title="02. EPI Projections — Fire section",
+              periods=PERIODS, epi=_epi(19200, 14400, 18500, 20900))
+    epi_sheet(wb, "02. EPI EQ", section="Earthquake",
+              title="02. EPI Projections — Earthquake section",
+              periods=PERIODS, epi=_epi(7250, 5430, 7000, 7900))
+    epi_sheet(wb, "02. EPI Wind", section="Windstorm",
+              title="02. EPI Projections — Windstorm section",
+              periods=PERIODS, epi=_epi(8600, 6440, 8300, 9250))
+
+    loss_sheet(wb, "03. Large Losses Fire", section="Fire",
+               title="03. Large Losses — Fire section", losses=FIRE_LOSSES)
+    cat_sheet(wb, "04. Cat Losses EQ", section="Earthquake",
+              title="04. Cat Losses — Earthquake", events=EQ_EVENTS, with_claims=True)
+    cat_sheet(wb, "04. Cat Losses Wind", section="Windstorm",
+              title="04. Cat Losses — Windstorm", events=WIND_EVENTS, with_claims=False)
+    profile_sheet(
+        wb, "05. Risk Profiles Fire", title="05. Risk Profiles — Fire",
+        with_bounds=True,
+        blocks_spec=[{"section": "Fire", "as_at": "30.09.2025",
+                      "rows": _profile_rows(PROFILE_FIRE, True)}],
+    )
+
+    for name, section, table in (
+        ("08. Splits Fire", "Fire", SPLIT_TABLE_FIRE),
+        ("08. Splits EQ", "Earthquake", SPLIT_TABLE_EQ),
+        ("08. Splits Wind", "Windstorm", SPLIT_TABLE_WIND),
+    ):
+        split_sheet(wb, name, title=f"08. Book split — {section} section",
+                    section=section, table=table)
+
+    # Earthquake arrives split by cover only — the occupancy comes from 08 (§2.6 case c).
+    # Windstorm arrives as one figure per zone (case a). Between them the pack shows both
+    # halves of the bridge on one workbook.
+    aggregate_sheet(wb, "06. EQ Aggs", title="06. Earthquake aggregates",
+                    section="Earthquake", scheme="EU EQ", base=EU_EQ_BASE,
+                    deductible="2%", detail="cover")
+    aggregate_sheet(wb, "07. Wind Aggs", title="07. Windstorm aggregates",
+                    section="Windstorm", scheme="EU Wind", base=EU_WIND_BASE,
+                    deductible="1.5%", detail=False)
+    return wb, "Intake_FireCatFull_v1.xlsx"
+
+
 def main():
     from datatransform.recalc import inject
 
     builders = (build_engineering, build_fire_cat, build_fire_eq_wind,
-                build_engineering_combined, build_fire_cat_losses)
+                build_engineering_combined, build_fire_cat_losses,
+                build_fire_cat_full)
     for builder in builders:
         built = builder()
         wb, name = built[0], built[1]

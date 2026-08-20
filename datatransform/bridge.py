@@ -53,6 +53,12 @@ LEVEL_NAMES = {
     "total": "single zone total",
 }
 
+# The gap above which two views of the book are called a disagreement. Declared in
+# ⟦GLOBAL⟧ beside the other two thresholds, because how far apart is "apart" is an
+# underwriting judgement and not a mechanic — spec §2.6.
+VIEW_ATTRIBUTE = "Split view warning"
+DEFAULT_VIEW_THRESHOLD = 0.02
+
 IPF_ROUNDS = 60
 IPF_TOLERANCE = 1e-9
 
@@ -72,7 +78,7 @@ class LevelFinding:
     secondary: str                                 # the level compared against it
     labels: tuple[str, ...]
     rows: list[tuple[str, float, float]] = field(default_factory=list)
-    threshold: float = 0.02
+    threshold: float = DEFAULT_VIEW_THRESHOLD
 
     @property
     def worst(self) -> float:
@@ -163,6 +169,13 @@ class Bridge:
         if kind == "total":
             return self.joint()
         raise ValueError(f"unknown reported level {kind!r}")
+
+
+def view_threshold(nomenclature) -> float:
+    """⟦GLOBAL⟧ ``Split view warning`` — the underwriter's number, not the tool's."""
+    from .growth import _read_share
+
+    return _read_share(nomenclature, VIEW_ATTRIBUTE, DEFAULT_VIEW_THRESHOLD)
 
 
 def _normalise(weights: dict[str, float], what: str, bridge: Bridge) -> dict[str, float]:

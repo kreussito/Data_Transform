@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .bridge import LevelFinding, build_bridge, fit_margins
+from .bridge import LevelFinding, build_bridge, fit_margins, view_threshold
 from .model import Block, Confidence, ExtractionError, Hypothesis, Record
 from .nomenclature import norm
 from .specs import AggregateSpec, Step2Spec
@@ -240,7 +240,7 @@ def _level_of(field_name: str, occupancy, covers, segments) -> str:
 
 
 def _reconcile_levels(block: Block, records, bridge, occupancy, covers, segments,
-                      targets, total: str, kind: str, labels):
+                      targets, total: str, kind: str, labels, nomenclature=None):
     """Two descriptions of the same book — compared, not silently resolved. Spec §2.6.
 
     A cedent may send the occupancy split *and* a Projects/Renewables split. Each implies
@@ -265,7 +265,8 @@ def _reconcile_levels(block: Block, records, bridge, occupancy, covers, segments
 
     secondary = kinds.pop()
     finding = LevelFinding(primary=kind, secondary=secondary,
-                           labels=tuple(occupancy))
+                           labels=tuple(occupancy),
+                           threshold=view_threshold(nomenclature))
 
     used = labels[0] + labels[1] if kind == "both" else tuple(labels)
     mine = {o: 0.0 for o in occupancy}
@@ -325,7 +326,7 @@ def _split(block: Block, spec: Step2Spec, records, nomenclature, blocks=None):
             finding = _reconcile_levels(
                 block, records, bridge, occupancy,
                 bridge.covers if bridge else (), segments, targets, rule.total,
-                "reported", targets,
+                "reported", targets, nomenclature,
             ) if bridge else None
         return records, (), [], False, (), finding
 
@@ -353,7 +354,8 @@ def _split(block: Block, spec: Step2Spec, records, nomenclature, blocks=None):
 
     notes.extend(_split_notes(kind, labels, bridge, targets, axes))
     finding = _reconcile_levels(block, records, bridge, occupancy, bridge.covers,
-                                segments, targets, rule.total, kind, labels)
+                                segments, targets, rule.total, kind, labels,
+                                nomenclature)
     created = tuple(t for t in targets if t not in block.fields)
     return out, created, notes, kind == "total", created, finding
 

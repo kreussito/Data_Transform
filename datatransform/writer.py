@@ -624,6 +624,8 @@ def write_growth(ws, table) -> list[tuple[str, str, float]]:
         f"expiring year from 01 and the renewal year from 02, since 01 carries no "
         f"forward figure."
     )
+    if getattr(table, "note", ""):
+        writer._line(f"ORDERING: {table.note}")
     writer._line(
         f"Implied rate change = (1 + premium growth) ÷ (1 + exposure growth) − 1. "
         f"Beyond ±{table.threshold:.0%} it is flagged — a warning, never an error: a book "
