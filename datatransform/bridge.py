@@ -1,0 +1,338 @@
+"""From what the cedent reported onto the nine cells. Specification_v1.md §2.6.
+
+A cat model wants sums insured on a fixed grid — occupancy × cover for earthquake,
+occupancy alone for windstorm. A cedent reports on whatever grid it keeps its book: one
+figure per zone, a cover split, an occupancy split, or — for an engineering book — a
+segmentation into Projects and Renewables that is not one of the target axes at all.
+
+So the operation is not "multiply the missing axis on". It is a **bridge**::
+
+    B(z, t) = Σₐ  S(z, a) · M(a → t)          with   Σₜ M(a → t) = 1
+
+``S`` is what arrived, ``M`` sends each reported category to a distribution over the
+target cells. Every case is that one formula:
+
+===================== ==================================================================
+reported occupancy    ``M(Res → Res·j) = p(j|Res)``, zero outside the row
+reported cover        ``M(Building → i·Building) = p(i|Building)``, zero outside the column
+reported segment      ``M(Renewables → i·j) = q(i|Renewables) · p(j|Renewables)``
+nothing but a total   ``M(Total → i·j) = p(i,j)``
+===================== ==================================================================
+
+The zeros are why a reported figure survives untouched: the row sums to exactly what
+arrived. The segment axis has no such zeros, and that is precisely what distinguishes it
+— it is a translation between two descriptions of the same book, not a refinement of one.
+
+**Where M comes from.** The joint ``p(i,j)`` is read off sheet ``08``, the cedent's own
+split table, per section. Shares taken from amounts cannot fail to close, and because
+only ratios are used, ``08``'s scale and currency are irrelevant — only its internal
+consistency matters.
+
+The one edge no cedent supplies is ``q(i|segment)``: nobody cross-tabulates Renewables
+against residential/commercial/industrial. That is a declared convention in ⟦SPLITS⟧ —
+Renewables is industrial, a Project is half commercial and half industrial — and it is
+marked as one wherever it is applied.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from .constants import (
+    IPF_ROUNDS,
+    IPF_TOLERANCE,
+    LEVEL_COVER,
+    LEVEL_NAMES,
+    LEVEL_OCCUPANCY,
+    LEVEL_SEGMENT,
+    LEVEL_TOTAL,
+    PERCENT_SCALE,
+    SHARE_CLOSURE,
+    SPLIT_VIEW_DEFAULT,
+    SPLIT_VIEW_WARNING,
+    F_CATEGORY,
+    F_TOTAL,
+    ROLE_SPLITS,
+    read_share,
+)
+from .model import ExtractionError
+from .nomenclature import norm
+
+TOTAL = F_TOTAL
+NO_COVER = ""          # 08 carrying no cover breakdown: one implicit cover category
+
+VIEW_ATTRIBUTE = SPLIT_VIEW_WARNING
+DEFAULT_VIEW_THRESHOLD = SPLIT_VIEW_DEFAULT
+
+
+@dataclass
+class LevelFinding:
+    """Two descriptions of the same book that do not agree — spec §2.6.
+
+    A cedent may send the occupancy split *and* a Projects/Renewables split. Each implies
+    an occupancy mix, and the tool has no way to know which the cedent stands behind. It
+    is not an error — books are kept two ways for good reasons and the two views drift —
+    so nothing fails. What the block does is show both, name the gap, and put the question
+    to the underwriter in writing, where the answer belongs.
+    """
+
+    primary: str                                   # the level the figures were built from
+    secondary: str                                 # the level compared against it
+    labels: tuple[str, ...]
+    rows: list[tuple[str, float, float]] = field(default_factory=list)
+    threshold: float = DEFAULT_VIEW_THRESHOLD
+
+    @property
+    def worst(self) -> float:
+        return max((abs(b - a) / a if a else 0.0 for _, a, b in self.rows), default=0.0)
+
+    @property
+    def agrees(self) -> bool:
+        return self.worst <= self.threshold
+
+    @property
+    def question(self) -> str:
+        return (
+            f"QUESTION FOR THE UNDERWRITER: which view does the cedent stand behind — "
+            f"the {LEVEL_NAMES.get(self.primary, self.primary)} or the "
+            f"{LEVEL_NAMES.get(self.secondary, self.secondary)}? The step-2 table above "
+            f"is built from the {LEVEL_NAMES.get(self.primary, self.primary)}. If the "
+            "other is the better one, say so and the block is rebuilt from it; if the "
+            "two should agree, the gap is a question for the cedent."
+        )
+
+
+@dataclass
+class Bridge:
+    """The joint distribution of one section's book, and the maps derived from it."""
+
+    section: str
+    occupancy: tuple[str, ...]
+    covers: tuple[str, ...]
+    amounts: dict[tuple[str, str], float]          # (occupancy, cover) → sum insured
+    segments: dict[str, dict[str, float]] = field(default_factory=dict)
+    segment_occupancy: dict[str, dict[str, float]] = field(default_factory=dict)
+    source: str = ""
+    conventions: list[str] = field(default_factory=list)
+
+    # ── the distributions ────────────────────────────────────────────────────
+    @property
+    def total(self) -> float:
+        return sum(self.amounts.values())
+
+    def joint(self) -> dict[tuple[str, str], float]:
+        """p(i,j) — used where nothing but a zone total arrived."""
+        total = self.total
+        return {k: v / total for k, v in self.amounts.items()} if total else {}
+
+    def cover_given_occupancy(self, occupancy: str) -> dict[str, float]:
+        """p(j|i) — the cover mix of one occupancy."""
+        row = {c: self.amounts.get((occupancy, c), 0.0) for c in self.covers}
+        return _normalise(row, f"cover given {occupancy!r}", self)
+
+    def occupancy_given_cover(self, cover: str) -> dict[str, float]:
+        """p(i|j) — the occupancy mix of one cover. Residential BI is nearly nil, and
+        this is the map that knows it; a single occupancy vector applied to all three
+        covers would not."""
+        column = {o: self.amounts.get((o, cover), 0.0) for o in self.occupancy}
+        return _normalise(column, f"occupancy given {cover!r}", self)
+
+    def cover_given_segment(self, segment: str) -> dict[str, float]:
+        """p(j|a) — read off 08's own row for that segment, where it has one."""
+        row = self.segments.get(segment)
+        if not row:
+            return _normalise({c: sum(self.amounts.get((o, c), 0.0)
+                                      for o in self.occupancy) for c in self.covers},
+                              "cover overall", self)
+        return _normalise(dict(row), f"cover given {segment!r}", self)
+
+    def occupancy_given_segment(self, segment: str) -> dict[str, float]:
+        """q(i|a) — the declared convention; 08 cannot supply this edge."""
+        declared = self.segment_occupancy.get(segment)
+        if not declared:
+            raise ExtractionError(
+                f"section {self.section!r}: nothing maps {segment!r} onto "
+                f"{', '.join(self.occupancy)}. Sheet 08 cannot supply it — no cedent "
+                "cross-tabulates that way — so it must be declared in sheet 00 ⟦SPLITS⟧"
+            )
+        return dict(declared)
+
+    # ── the bridge itself ────────────────────────────────────────────────────
+    def distribute(self, kind: str, label: str) -> dict[tuple[str, str], float]:
+        """M(a → ·) for one reported category. The four rows of the table above."""
+        if kind == LEVEL_OCCUPANCY:
+            return {(label, c): s for c, s in self.cover_given_occupancy(label).items()}
+        if kind == LEVEL_COVER:
+            return {(o, label): s for o, s in self.occupancy_given_cover(label).items()}
+        if kind == LEVEL_SEGMENT:
+            occ = self.occupancy_given_segment(label)
+            cov = self.cover_given_segment(label)
+            return {(o, c): a * b for o, a in occ.items() for c, b in cov.items()}
+        if kind == LEVEL_TOTAL:
+            return self.joint()
+        raise ValueError(f"unknown reported level {kind!r}")
+
+
+def view_threshold(nomenclature) -> float:
+    """⟦GLOBAL⟧ ``Split view warning`` — the underwriter's number, not the tool's."""
+    return read_share(nomenclature, VIEW_ATTRIBUTE, DEFAULT_VIEW_THRESHOLD)
+
+
+def _normalise(weights: dict[str, float], what: str, bridge: Bridge) -> dict[str, float]:
+    total = sum(weights.values())
+    if total <= 0:
+        raise ExtractionError(
+            f"section {bridge.section!r}: sheet 08 carries nothing under {what}, so the "
+            "share cannot be worked out — and the tool will not spread it evenly instead"
+        )
+    return {k: v / total for k, v in weights.items()}
+
+
+# ────────────────────────────────────────────────── building it from sheet 08
+CATEGORY_FIELD = F_CATEGORY
+
+
+def build_bridge(nomenclature, blocks, section: str, occupancy, covers) -> Bridge | None:
+    """Read one section's split table. ``None`` where the section carries no 08."""
+    from .crosschecks import find_block
+
+    pool = list(blocks.values()) if isinstance(blocks, dict) else list(blocks)
+    table = find_block(pool, ROLE_SPLITS, section)
+    if table is None:
+        return None
+
+    known_occupancy = {norm(o).casefold(): o for o in occupancy}
+    cover_fields = [c for c in covers if c in table.fields]
+    if not cover_fields and TOTAL not in table.fields:
+        raise ExtractionError(
+            f"{table.sheet_name!r}: the split table declares neither the cover columns "
+            f"({', '.join(covers)}) nor {TOTAL}, so it carries no amounts to take a "
+            "share of"
+        )
+
+    amounts: dict[tuple[str, str], float] = {}
+    segments: dict[str, dict[str, float]] = {}
+    listed_covers = tuple(cover_fields) if cover_fields else (NO_COVER,)
+    weights = _row_weights(table, cover_fields)
+
+    for record in table.records:
+        label = norm(record.values.get(CATEGORY_FIELD))
+        row = ({c: _number(record.values.get(c)) for c in cover_fields} if cover_fields
+               else {NO_COVER: _number(record.values.get(TOTAL))})
+        if weights is not None:
+            # Row percentages: each row is a cover mix, and Total carries the weight.
+            scale = weights.get(label, 0.0)
+            row = {c: v * scale for c, v in row.items()}
+        match = known_occupancy.get(label.casefold())
+        if match is not None:
+            for cover, value in row.items():
+                amounts[(match, cover)] = amounts.get((match, cover), 0.0) + value
+        else:
+            segments[label] = row                 # Projects, Renewables — a third axis
+
+    bridge = Bridge(
+        section=section, occupancy=tuple(occupancy), covers=listed_covers,
+        amounts=amounts, segments=segments,
+        source=f"{table.sheet_name} block {table.index}",
+    )
+    _attach_conventions(bridge, nomenclature, table.dataset.key)
+
+    if segments and not amounts:
+        # An engineering book: 08 is keyed by Projects/Renewables, so the occupancy grid
+        # has to be built through the declared convention before anything else can use it.
+        _fold_segments(bridge)
+    if not bridge.amounts:
+        raise ExtractionError(
+            f"{table.sheet_name!r}: no row matches {', '.join(occupancy)} and none could "
+            "be mapped there, so the section has no occupancy split at all"
+        )
+    return bridge
+
+
+def _row_weights(table, cover_fields) -> dict[str, float] | None:
+    """Percentages that close **per row** are conditionals, not a joint — spec §2.6.
+
+    A split table may arrive as amounts or as percentages, and either is fine: only
+    ratios are read, so the tool normalises whatever it finds. But a grid whose rows each
+    sum to 100% is not one distribution — it is three, and normalising it whole would
+    silently assert that the three occupancies are equally large. So that shape is
+    recognised and the weight is taken from ``Total``, which is the only place it can be.
+    """
+    if not cover_fields or TOTAL not in table.fields or len(table.records) < 2:
+        return None
+
+    weights = {}
+    for record in table.records:
+        row = sum(_number(record.values.get(c)) for c in cover_fields)
+        if not (abs(row - 1.0) < SHARE_CLOSURE
+                or abs(row - PERCENT_SCALE) < PERCENT_SCALE * SHARE_CLOSURE):
+            return None                            # amounts, or a joint — normalise whole
+        weights[norm(record.values.get(CATEGORY_FIELD))] = \
+            _number(record.values.get(TOTAL)) / row
+    return weights if len(set(weights.values())) > 1 else None
+
+
+def _attach_conventions(bridge: Bridge, nomenclature, dataset_key: str) -> None:
+    """⟦SPLITS⟧ rows whose ``From`` names something outside the occupancy axis."""
+    targets = set(bridge.occupancy)
+    for rule in getattr(nomenclature, "splits", None) or []:
+        if not rule.source_category or rule.category not in targets:
+            continue
+        if not (rule.applies_to(dataset_key) or rule.dataset == "*"):
+            continue
+        bridge.segment_occupancy.setdefault(rule.source_category, {})[rule.category] = \
+            rule.share
+        if rule.source:
+            bridge.conventions.append(f"{rule.source_category} [{rule.source}]")
+    bridge.conventions = list(dict.fromkeys(bridge.conventions))
+
+
+def _fold_segments(bridge: Bridge) -> None:
+    """Turn a Projects/Renewables table into the occupancy grid it stands for."""
+    for segment, row in bridge.segments.items():
+        occ = bridge.occupancy_given_segment(segment)
+        for cover, value in row.items():
+            for name, share in occ.items():
+                key = (name, cover)
+                bridge.amounts[key] = bridge.amounts.get(key, 0.0) + value * share
+
+
+def _number(value) -> float:
+    return float(value) if isinstance(value, (int, float)) else 0.0
+
+
+# ─────────────────────────────────────────── two reported margins: fit both
+def fit_margins(seed, rows, columns, row_totals, column_totals):
+    """Fit a grid to **both** reported margins — spec §2.6.
+
+    Where a zone reports occupancy *and* cover as two vectors, conditioning on one of
+    them preserves that one and lets the other drift. Both were reported, so neither may
+    move: the seed from 08 is scaled alternately to the row and column totals until it
+    satisfies both (RAS/iterative proportional fitting).
+
+    The seed decides only *how* the two margins interact — the margins themselves come
+    out exactly as sent.
+    """
+    grid = {(r, c): max(seed.get((r, c), 0.0), 0.0) for r in rows for c in columns}
+    if sum(grid.values()) <= 0:
+        grid = {k: 1.0 for k in grid}
+
+    for _ in range(IPF_ROUNDS):
+        moved = 0.0
+        for r in rows:
+            current = sum(grid[(r, c)] for c in columns)
+            if current > 0:
+                factor = row_totals.get(r, 0.0) / current
+                moved = max(moved, abs(factor - 1))
+                for c in columns:
+                    grid[(r, c)] *= factor
+        for c in columns:
+            current = sum(grid[(r, c)] for r in rows)
+            if current > 0:
+                factor = column_totals.get(c, 0.0) / current
+                moved = max(moved, abs(factor - 1))
+                for r in rows:
+                    grid[(r, c)] *= factor
+        if moved < IPF_TOLERANCE:
+            break
+    return grid

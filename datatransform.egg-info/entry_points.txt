@@ -1,0 +1,2 @@
+[console_scripts]
+datatransform = datatransform.__main__:main

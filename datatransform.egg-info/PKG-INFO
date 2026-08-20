@@ -1,0 +1,84 @@
+Metadata-Version: 2.4
+Name: datatransform
+Version: 0.1.0
+Summary: Extract, filter and transform reinsurance treaty submission data from Excel, driven by metadata declared in the workbook itself
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: openpyxl>=3.1
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: ruff>=0.5; extra == "dev"
+
+# Data_Transform
+
+Excel data to be filtered, extracted and finally transformed to standard format; each step to be logged and documented.
+
+Reinsurance treaty submission workbooks arrive as a collage of sheets copied from
+different original files. This tool extracts a declared subset of each sheet, transforms
+it in two documented steps, and writes the result back beneath the original data so a
+reviewer can follow every step without leaving Excel.
+
+## The idea
+
+**The workbook describes itself.** Sheet `00` declares *what* to extract, as a
+vocabulary humans copy from. Markers in **column A** of each data sheet declare *where*
+it lives. Nothing depends on cell position.
+
+```
+Column A of 01. History          Meaning
+─────────────────────────────    ─────────────────────────────────────────────
+Currency = USD                   an attribute of the sheet
+H_Year basis = UW                the same, declared as a hypothesis
+Header_1                         this row is the extraction row
+Info_1 = L                       column L selects which rows are extracted
+```
+
+Records are marked with `=ROW()`, which is self-validating: if the value at row *r* is
+not *r*, the sheet has been manipulated and the run stops. Totals and footnotes are
+excluded simply by not being marked — no heuristics guess at intent.
+
+## Usage
+
+```bash
+pip install openpyxl
+python -m datatransform Intake_v1.xlsx -o output/Intake_v1_transformed.xlsx
+```
+
+The source workbook is never modified; it is the audit baseline. Output goes to a copy,
+with two logs in `logs/` — one technical, one a plain-language record of every decision
+and interpretation.
+
+```bash
+pytest tests/
+```
+
+## What's here
+
+| | |
+|---|---|
+| `specification_v1.md` | The rules, in full |
+| `Intake_v1.xlsx` | Fire treaty — datasets 00–03, both orientations |
+| `Intake_Engineering_v1.xlsx` | Engineering treaty — the same shape, different data |
+| `Intake_FireCat_v1.xlsx` | Fire + Nat Cat — the two cat sections share one sheet |
+| `Intake_FireEQWind_v1.xlsx` | Fire + Earthquake + Hurricane — a sheet per section |
+| `datatransform/` | Implementation |
+| `tools/` | Generators for the reference workbooks |
+| `tests/` | Test suite covering the specification's rules |
+
+## Sections
+
+A treaty is one or more sections, declared in `⟦SECTIONS⟧` of sheet 00:
+
+| Section | Kind | Datasets |
+|---|---|---|
+| `Fire` | per risk | 01, 02, 03 |
+| `Earthquake` | cat | 01, 02, 04 |
+
+**A section is a block.** Whether the blocks sit in one sheet or three is immaterial —
+the two Nat Cat workbooks carry identical figures in the two layouts and are verified
+to produce identical crosschecks. Rules are scoped by section kind and evaluated once
+per applicable section, so a Fire treaty reports the cat rule as *not applicable* rather
+than complaining about a sheet that correctly does not exist.
+
+Datasets `00`–`04` are implemented. `05`–`10` are not yet specified; see §13 of the
+specification.
