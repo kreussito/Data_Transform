@@ -84,7 +84,7 @@ pip install -e ".[dev]"
 ### Proving it works before trusting it with real data
 
 ```bash
-pytest                                # 424 tests — the specification's rules
+pytest                                # 440 tests — the specification's rules
 python -m datatransform Intake_FireCatFull_v1.xlsx -o out.xlsx
 ```
 
@@ -125,6 +125,7 @@ decision and interpretation.
 python tools/build_v1.py             # Intake_v1.xlsx
 python tools/build_intake.py         # the other six
 python tools/build_mexico.py         # Intake_Mexico_v1.xlsx — the cat aggregates
+python tools/transpose_pack.py       # the complete pack, flipped on its side
 python tools/demo_profile_shapes.py  # the three risk-profile presentations
 ```
 
@@ -144,6 +145,7 @@ recalculation.
 | `Intake_FireEQWind_v1.xlsx` | Fire + Earthquake + Hurricane — a sheet per section |
 | `Intake_FireCatLosses_v1.xlsx` | Fire + Nat Cat carrying only `01`, `02` and `04`, split by EQ and Wind |
 | `Intake_FireCatFull_v1.xlsx` | **The complete treaty** — Fire + EQ + Wind, every dataset `01`–`09` |
+| `Intake_FireCatFull_Transposed_v1.xlsx` | The same pack **on its side** — every dataset transposed |
 | `Intake_Mexico_v1.xlsx` | Mexican cat aggregates — datasets `06` / `07`, three versions per sheet |
 | `datatransform/` | Implementation |
 | `tools/` | Generators for the reference workbooks |

@@ -347,6 +347,29 @@ def _header_rows(markers) -> set[int]:
     return {m.row for m in markers if m.name == M_HEADER}
 
 
+def _label_band(markers, index: int, limit_row: int) -> tuple[int, int]:
+    """The rows a transposed block's labels may occupy — spec §6.2, §6.5.
+
+    Row-wise, each block has its own extraction *row*, so scanning it can never pick up a
+    neighbour's labels. Transposed, several blocks share one label *column*, and scanning
+    the whole of it finds ``Zone`` three times on a sheet carrying three versions.
+
+    The band is the mirror of the row-wise rule: a block's fields lie above its own
+    selector row and below the selector row of the block before it. Nothing new is
+    declared — the boundary is already in the sheet, in the ``Info_i`` markers.
+    """
+    rows = sorted(int(m.value) for m in markers
+                  if m.name == M_INFO and m.index is not None and m.value
+                  and str(m.value).strip().isdigit())
+    mine = next((int(m.value) for m in markers
+                 if m.name == M_INFO and m.index == index and m.value
+                 and str(m.value).strip().isdigit()), None)
+    if mine is None or len(rows) < 2:
+        return 1, limit_row
+    earlier = [r for r in rows if r < mine]
+    return (max(earlier) + 1 if earlier else 1), mine
+
+
 def extract_block(values_ws, formulas_ws, dataset: Dataset, markers, index: int,
                   nomenclature: Nomenclature) -> Block:
     header = structural(markers, M_HEADER, index)
@@ -381,9 +404,10 @@ def extract_block(values_ws, formulas_ws, dataset: Dataset, markers, index: int,
             )
         header_ref, info_ref = header.value.strip().upper(), info.value.strip()
         hcol = col_idx(header_ref)
+        first, last = _label_band(markers, index, limit_row)
         cells = [
             (values_ws.cell(row=r, column=hcol).value, r)
-            for r in range(1, limit_row + 1)
+            for r in range(first, min(last, limit_row) + 1)
             if values_ws.cell(row=r, column=hcol).value is not None
         ]
         address = _resolve_labels(cells, dataset, where)
