@@ -35,6 +35,7 @@ from sheets import (  # noqa: E402
     grey,
     head_f,
     inert_f,
+    inventory_block,
     markers,
     put,
     record_block,
@@ -258,7 +259,9 @@ def build_sheet00(wb):
             cell.font, cell.fill = body_f, yellow
         row += 1
 
-    r = block_header(ws, row + 2, "⟦SECTIONS⟧", ["Section", "Kind", "Datasets"])
+    row = inventory_block(ws, row + 2)
+
+    r = block_header(ws, row + 1, "⟦SECTIONS⟧", ["Section", "Kind", "Datasets"])
     for name, kind, roles in SECTIONS:
         put(ws, f"B{r}", name, body_f, yellow)
         put(ws, f"C{r}", kind, body_f, blue)

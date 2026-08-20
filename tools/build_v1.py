@@ -59,6 +59,26 @@ def block(ws, row, anchor, columns):
     return row + 2
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sheets import INVENTORY  # noqa: E402
+
+
+def inventory_block(ws, row):
+    """⟦INVENTORY⟧ — every dataset the standard defines, not just this pack's."""
+    r = block(ws, row, "⟦INVENTORY⟧", ["Role", "Sheet", "Holds", "State"])
+    for role, sheet, holds, state in INVENTORY:
+        put(ws, f"B{r}", role, body_f)
+        put(ws, f"C{r}", sheet, body_f)
+        put(ws, f"D{r}", holds, body_f)
+        put(ws, f"E{r}", state, body_f, grey if state != "implemented" else None)
+        r += 1
+    put(ws, f"B{r + 1}",
+        "Every dataset the tool knows, whether or not this pack carries it. The register "
+        "above lists what is here; ⟦SECTIONS⟧ says which roles each section expects, so a "
+        "missing sheet reads as structure rather than as a gap.", sub_f)
+    return r + 2
+
+
 # ══════════════════════════════════════════════════ 00. NC+Interdep
 ws = wb.active
 ws.title = "00. NC+Interdep"
@@ -125,8 +145,11 @@ for row, sheet, key, headers, attrs, provisional in datasets:
         if not provisional:
             c.fill = yellow
 
+# ── ⟦INVENTORY⟧ — every dataset the standard defines, 01 … 11
+_inv = inventory_block(ws, 13)
+
 # ── ⟦SECTIONS⟧ — what this treaty is made of
-r = block(ws, 13, "⟦SECTIONS⟧", ["Section", "Kind", "Datasets"])
+r = block(ws, _inv + 1, "⟦SECTIONS⟧", ["Section", "Kind", "Datasets"])
 put(ws, f"B{r}", SECTION, body_f, yellow)
 put(ws, f"C{r}", "per risk", body_f, blue)
 put(ws, f"D{r}", "01, 02, 03, 05", body_f)

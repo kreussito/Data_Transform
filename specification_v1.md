@@ -40,21 +40,29 @@ is written as a visible block with control sums that tie back to the step before
 
 ## 2 · Workbook inventory
 
-| Sheet | Role | Status |
+| Sheet | Holds | State |
 |---|---|---|
-| `00. Nomenclature & Interdependencies` | Vocabulary and dataset register | Authored |
-| `01. History` | Premium and loss history | Authored |
-| `02. EPI Projections` | Estimated premium income | Authored |
-| `03. Large Losses` | Individual large claims | Authored |
-| `04. Cat Losses` | Catastrophe events | Authored |
-| `05. Risk Profiles` | Banded exposure — see §2.4 | Authored |
-| `06. EQ Aggs` | Earthquake aggregates | Authored |
-| `07. Wind Aggs` | Windstorm aggregates | Authored |
-| `08 …` | Fire splits **or** Engineering splits — occupancy × cover, see §2.1 | Authored |
-| `09. Rate Development` | Rate change history | Authored, optional |
-| `10. Triangles` | Development triangles | Authored |
-| `Exchange rates` | FX rates for conversion | Authored |
-| `20. Summary` | Collected step-2 blocks | **Generated** |
+| `00. Nomenclature & Interdependencies` | Vocabulary, dataset register, inventory | — |
+| `01. History` | Premium and loss history per section | **implemented** |
+| `02. EPI Projections` | Estimated premium income, N and N+1 | **implemented** |
+| `03. Large Losses` | Individual large claims, per-risk sections | **implemented** |
+| `04. Cat Losses` | Catastrophe events, cat sections | **implemented** |
+| `05. Risk Profiles` | Banded exposure — the per-risk rating basis, §2.4 | **implemented** |
+| `06. EQ Aggs` | Earthquake sums insured per cat zone, §2.5 | **implemented** |
+| `07. Wind Aggs` | Windstorm sums insured per cat zone, §2.5 | **implemented** |
+| `08. Splits` | Occupancy × cover (Fire) or × Projects/Renewables (Engineering), §2.1 | axes settled, measures open |
+| `09. Rate Development` | Rate change history — optional | outstanding |
+| `10. Triangles` | Loss development triangles | outstanding |
+| `11. Exchange rates` | FX rates for conversion between currencies | outstanding |
+| `20. Summary` | Collected step-2 blocks | outstanding, **generated** |
+
+Sheet `00` carries this table as its `⟦INVENTORY⟧` block (§3.3), so a reader of any pack
+can tell a sheet that is *absent from this treaty* from one that was *never specified*.
+The register above `⟦INVENTORY⟧` lists what the pack actually carries; `⟦SECTIONS⟧` says
+which roles each section expects. Three different questions, three blocks.
+
+`Exchange rates` is numbered `11` so that every dataset sorts by its role (§2.2); it was
+the one sheet without a number, which made it the one sheet the ordering could not place.
 
 The reference workbook carries `01` and `02` in both orientations, as
 `…_Transposed` sheets, so every rule is exercised both ways.
@@ -567,6 +575,18 @@ what must.
 One row per zoning scheme, holding the **complete** list. A `06`/`07` block names its
 scheme through the `Zone scheme` attribute; step 2 fills every declared zone the cedent
 did not list with 0, and a scheme not listed here is fatal. See §2.5 and S18.
+
+#### `⟦INVENTORY⟧` — every dataset the standard defines
+
+| Role | Sheet | Holds | State |
+|---|---|---|---|
+| `01` … `11`, `20` | | | see §2 |
+
+The same table as §2, written into every pack. It answers a question the register cannot:
+the register lists the sheets *this* workbook carries, so a dataset missing from it might
+be absent from the treaty or might never have been specified at all. `⟦INVENTORY⟧` tells
+the two apart, and carries the `State` column so a reader knows what the tool will
+actually do with a sheet if one turns up.
 
 #### `⟦AXES⟧` — the dimensions a dataset is split along
 
@@ -1635,10 +1655,10 @@ cleanly in every case, and none is worth building before the decision behind it 
 
 Remaining:
 
-1. **Datasets `08`–`10`.** Header labels and attributes not yet specified.
-2. **Sheet `08`'s measures.** Both axes are settled (§2.1) and the split machinery is
-   shared with `06`/`07` (§2.6); what is *counted* at each intersection — risk count,
-   sum insured, premium — is not.
+1. **Datasets `09`–`11`.** Header labels and attributes not yet specified. `08`'s axes
+   are settled (§2.1) and its split machinery is shared with `06`/`07` (§2.6).
+2. **Sheet `08`'s measures.** What is *counted* at each intersection — risk count,
+   sum insured, premium — is the last open question on `08`.
 3. **Sheet `20. Summary`.** Specified in §9.1 O6 but not yet implemented; it needs at
    least two datasets to be meaningful.
 

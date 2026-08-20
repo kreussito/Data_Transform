@@ -105,3 +105,42 @@ def record_block(ws, *, header_row, selector_col, source_labels, declared, rows,
 def widths(ws, spec: dict):
     for col, width in spec.items():
         ws.column_dimensions[col].width = width
+
+
+# ── the dataset inventory ─────────────────────────────────────────────────────
+# The register above it says what *this pack* carries. This block says what the
+# standard defines, so a reader can tell a sheet that is absent from a sheet that
+# was never specified — spec §2.
+#
+#   role · sheet · what it holds · state
+INVENTORY = [
+    ("01", "History", "Premium and loss history per section", "implemented"),
+    ("02", "EPI Projections", "Estimated premium income, N and N+1", "implemented"),
+    ("03", "Large Losses", "Individual large claims, per-risk sections", "implemented"),
+    ("04", "Cat Losses", "Catastrophe events, cat sections", "implemented"),
+    ("05", "Risk Profiles", "Banded exposure — the per-risk rating basis", "implemented"),
+    ("06", "EQ Aggs", "Earthquake sums insured per cat zone", "implemented"),
+    ("07", "Wind Aggs", "Windstorm sums insured per cat zone", "implemented"),
+    ("08", "Splits", "Occupancy x cover (Fire) or x Projects/Renewables (Eng.)",
+     "axes settled, measures open"),
+    ("09", "Rate Development", "Rate change history — optional", "outstanding"),
+    ("10", "Triangles", "Loss development triangles", "outstanding"),
+    ("11", "Exchange rates", "FX rates for conversion between currencies", "outstanding"),
+    ("20", "Summary", "Collected step-2 blocks — written, never read", "outstanding"),
+]
+
+
+def inventory_block(ws, row, note=None):
+    """Write ⟦INVENTORY⟧ — every dataset the standard defines, not just this pack's."""
+    r = block_header(ws, row, "⟦INVENTORY⟧", ["Role", "Sheet", "Holds", "State"])
+    for role, sheet, holds, state in INVENTORY:
+        put(ws, f"B{r}", role, body_f)
+        put(ws, f"C{r}", sheet, body_f)
+        put(ws, f"D{r}", holds, body_f)
+        put(ws, f"E{r}", state, body_f, grey if state != "implemented" else None)
+        r += 1
+    put(ws, f"B{r + 1}", note or (
+        "Every dataset the tool knows, whether or not this pack carries it. The register "
+        "above lists what is here; ⟦SECTIONS⟧ says which roles each section expects, so a "
+        "missing sheet reads as structure rather than as a gap."), sub_f)
+    return r + 2

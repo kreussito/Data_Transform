@@ -38,6 +38,7 @@ from sheets import (  # noqa: E402
     grey,
     head_f,
     inert_f,
+    inventory_block,
     markers,
     mono_f,
     prov_f,
@@ -176,8 +177,11 @@ def build_sheet00(wb, *, treaty_type, sections, datasets, rules=RULES, full_key_
             ws.cell(row=row, column=14 + i, value=a).font = prov_f
         row += 1
 
+    # ── ⟦INVENTORY⟧ — every dataset the standard defines, 01 … 11
+    row = inventory_block(ws, row + 2)
+
     # ── ⟦SECTIONS⟧ — what this treaty is made of
-    r = block_header(ws, row + 2, "⟦SECTIONS⟧", ["Section", "Kind", "Datasets"])
+    r = block_header(ws, row + 1, "⟦SECTIONS⟧", ["Section", "Kind", "Datasets"])
     for name, kind, roles in sections:
         put(ws, f"B{r}", name, body_f, yellow)
         put(ws, f"C{r}", kind, body_f, blue)
