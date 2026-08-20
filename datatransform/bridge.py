@@ -44,8 +44,54 @@ from .nomenclature import norm
 TOTAL = "Total"
 NO_COVER = ""          # 08 carrying no cover breakdown: one implicit cover category
 
+LEVEL_NAMES = {
+    "reported": "reported grid",
+    "occupancy": "occupancy split",
+    "cover": "cover split",
+    "both": "two reported margins",
+    "segment": "Projects/Renewables segmentation",
+    "total": "single zone total",
+}
+
 IPF_ROUNDS = 60
 IPF_TOLERANCE = 1e-9
+
+
+@dataclass
+class LevelFinding:
+    """Two descriptions of the same book that do not agree — spec §2.6.
+
+    A cedent may send the occupancy split *and* a Projects/Renewables split. Each implies
+    an occupancy mix, and the tool has no way to know which the cedent stands behind. It
+    is not an error — books are kept two ways for good reasons and the two views drift —
+    so nothing fails. What the block does is show both, name the gap, and put the question
+    to the underwriter in writing, where the answer belongs.
+    """
+
+    primary: str                                   # the level the figures were built from
+    secondary: str                                 # the level compared against it
+    labels: tuple[str, ...]
+    rows: list[tuple[str, float, float]] = field(default_factory=list)
+    threshold: float = 0.02
+
+    @property
+    def worst(self) -> float:
+        return max((abs(b - a) / a if a else 0.0 for _, a, b in self.rows), default=0.0)
+
+    @property
+    def agrees(self) -> bool:
+        return self.worst <= self.threshold
+
+    @property
+    def question(self) -> str:
+        return (
+            f"QUESTION FOR THE UNDERWRITER: which view does the cedent stand behind — "
+            f"the {LEVEL_NAMES.get(self.primary, self.primary)} or the "
+            f"{LEVEL_NAMES.get(self.secondary, self.secondary)}? The step-2 table above "
+            f"is built from the {LEVEL_NAMES.get(self.primary, self.primary)}. If the "
+            "other is the better one, say so and the block is rebuilt from it; if the "
+            "two should agree, the gap is a question for the cedent."
+        )
 
 
 @dataclass
@@ -154,11 +200,16 @@ def build_bridge(nomenclature, blocks, section: str, occupancy, covers) -> Bridg
     amounts: dict[tuple[str, str], float] = {}
     segments: dict[str, dict[str, float]] = {}
     listed_covers = tuple(cover_fields) if cover_fields else (NO_COVER,)
+    weights = _row_weights(table, cover_fields)
 
     for record in table.records:
         label = norm(record.values.get(CATEGORY_FIELD))
         row = ({c: _number(record.values.get(c)) for c in cover_fields} if cover_fields
                else {NO_COVER: _number(record.values.get(TOTAL))})
+        if weights is not None:
+            # Row percentages: each row is a cover mix, and Total carries the weight.
+            scale = weights.get(label, 0.0)
+            row = {c: v * scale for c, v in row.items()}
         match = known_occupancy.get(label.casefold())
         if match is not None:
             for cover, value in row.items():
@@ -183,6 +234,28 @@ def build_bridge(nomenclature, blocks, section: str, occupancy, covers) -> Bridg
             "be mapped there, so the section has no occupancy split at all"
         )
     return bridge
+
+
+def _row_weights(table, cover_fields) -> dict[str, float] | None:
+    """Percentages that close **per row** are conditionals, not a joint — spec §2.6.
+
+    A split table may arrive as amounts or as percentages, and either is fine: only
+    ratios are read, so the tool normalises whatever it finds. But a grid whose rows each
+    sum to 100% is not one distribution — it is three, and normalising it whole would
+    silently assert that the three occupancies are equally large. So that shape is
+    recognised and the weight is taken from ``Total``, which is the only place it can be.
+    """
+    if not cover_fields or TOTAL not in table.fields or len(table.records) < 2:
+        return None
+
+    weights = {}
+    for record in table.records:
+        row = sum(_number(record.values.get(c)) for c in cover_fields)
+        if not (abs(row - 1.0) < 0.005 or abs(row - 100.0) < 0.5):
+            return None                            # amounts, or a joint — normalise whole
+        weights[norm(record.values.get(CATEGORY_FIELD))] = \
+            _number(record.values.get(TOTAL)) / row
+    return weights if len(set(weights.values())) > 1 else None
 
 
 def _attach_conventions(bridge: Bridge, nomenclature, dataset_key: str) -> None:

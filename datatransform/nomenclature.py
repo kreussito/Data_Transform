@@ -146,11 +146,17 @@ class Nomenclature:
             r.source_category for r in self.splits if r.source_category))
 
     def cover_categories(self) -> tuple[str, ...]:
-        """The cover axis wherever it is declared — 07 targets occupancy only, but its
-        08 table may still carry the cover breakdown, and it is worth using."""
-        for axis in self.axes:
-            if len(axis.categories) and norm(axis.name).casefold() == "cover":
-                return tuple(axis.categories)
+        """The second axis of whichever dataset declares two — spec §2.6.
+
+        Windstorm targets the first axis alone, but its 08 table may still carry the
+        second one, and using it is better than throwing it away. Found by *position*
+        rather than by the word "Cover", so renaming an axis — or giving an engineering
+        book a different second one — is a sheet edit and not a code change.
+        """
+        for key in {a.dataset for a in self.axes}:
+            declared = self.axes_for(key)
+            if len(declared) > 1:
+                return tuple(declared[1].categories)
         return ()
 
     def splits_for(self, dataset_key: str, axis: str, source_category: str = ""):

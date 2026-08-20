@@ -426,6 +426,16 @@ that one and lets the other drift. Both were reported, so neither may move. The 
 satisfies both (iterative proportional fitting). **The seed decides only how the two
 margins interact**; the margins themselves come out exactly as sent.
 
+#### Changing the shape is a sheet edit
+
+Nothing about the axes is in the code. The categories, their order and their names come
+from `⟦AXES⟧`; the second axis is found by **position**, not by the word "Cover", so
+renaming it — or giving an engineering book Projects/Renewables as its first axis and
+something else as its second — changes no code. The segment conventions are rows in
+`⟦SPLITS⟧`. An engineering aggregate is therefore a different declaration, not a
+different program, which is what keeps it cheap to change while the shape is still being
+argued about.
+
 #### The one edge no cedent supplies
 
 `q(i|segment)` — Projects and Renewables against residential/commercial/industrial.
@@ -448,12 +458,61 @@ comes from `08` and carries provenance. Where a section has no `08` at all, `⟦
 also carry a fallback ratio — last year's, or another client's — and it is written into
 the block as an assumption with its origin named.
 
+#### Amounts or percentages — only ratios are read
+
+A split table may arrive as sums insured or as percentages, and neither needs handling:
+the grid is normalised, so both give the same distribution.
+
+One shape does need recognising. **Percentages that close per row are not one
+distribution but three** — a cover mix for each occupancy, with nothing saying how large
+each occupancy is. Normalising such a grid whole would silently assert that the three
+occupancies are equally big. So that shape is detected (every row summing to 100% or to
+1, with differing totals) and the weight is taken from the `Total` column, which is the
+only place it can be.
+
+#### Two views of the same book — a finding, not a refusal
+
+A cedent may send the occupancy split **and** a Projects/Renewables split. Each implies an
+occupancy mix, and nothing in the numbers says which one it stands behind. Neither
+choosing one quietly nor refusing the submission is right: the first loses a column
+without a trace, the second throws away a good pack over a question a person answers in a
+sentence.
+
+So the block is built from the **richer** level — the order is: two margins, one margin,
+segmentation, bare total — the other is bridged as well, and the two are shown side by
+side under step 2:
+
+```
+TWO VIEWS OF THE SAME BOOK — THEY DO NOT AGREE
+The block reports the reported grid and the Projects/Renewables segmentation. Both
+describe the same portfolio, so each implies an occupancy mix. Neither is an error
+and nothing here fails the run.
+
+              from the reported grid   from the segmentation   difference
+  Res                         89,569                       0      -100.0%
+  Com                         78,370                 111,957       +42.9%
+  Ind                         55,978                 111,957      +100.0%
+  Largest difference                                              100.0%
+
+QUESTION FOR THE UNDERWRITER: which view does the cedent stand behind — the reported
+grid or the Projects/Renewables segmentation? …
+Answer:  ▁▁▁▁▁▁▁▁▁▁
+```
+
+It is written **under step 2** rather than as a note, because it is not a description of
+what was done — it is something a person has to answer, and an answer needs somewhere to
+be written. The empty cell is the only place in the whole output where the tool asks for
+input rather than reporting a result.
+
+Where the two agree within tolerance the block still appears, saying so. A confirmation
+is worth as much as a discrepancy: it means two independent descriptions of the book
+line up, which is the strongest thing that can be said about a split.
+
 #### What it refuses
 
-**A reported column the bridge does not consume is never dropped in silence.** Two
-columns describing the same book on different axes is not a level the tool can read, and
-quietly using one while discarding the other would lose money without leaving a trace.
-So it refuses and names the column.
+**A column belonging to no declared level.** If it can be bridged it becomes the finding
+above; if nothing knows what it is, it can be neither used nor compared, and dropping a
+column that carries money is not something this step does in silence.
 
 **Splitting happens inside a zone, never across zones.** An occupancy mix is a property
 of the portfolio and transfers plausibly; the geographic distribution *is* the analysis,

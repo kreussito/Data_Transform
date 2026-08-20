@@ -24,6 +24,9 @@ ctrl_f = Font(name=FONT, size=10, bold=True)
 step1_fill = PatternFill("solid", fgColor="DDEBF7")
 step2_fill = PatternFill("solid", fgColor="E2EFDA")
 ctrl_fill = PatternFill("solid", fgColor="FFF2CC")
+# An empty, obviously-fillable cell: the one place the tool asks for a
+# human answer rather than reporting one — spec §2.6.
+input_fill = PatternFill("solid", fgColor="DDEBF7")
 
 
 def anchor_tag(key: str, step: str) -> str:
@@ -315,9 +318,60 @@ class BlockWriter:
                 "tie-back applies; each is written as a live formula over the "
                 "columns above."
             )
+        self._write_level_finding(result)
         self._write_aggregate(result)
         self._write_figures(result)
         self._write_crosschecks(result.block)
+
+    def _write_level_finding(self, result: Step2Result) -> None:
+        """Two views of the same book, side by side, with the question — spec §2.6.
+
+        Written under step 2 rather than as a note, because it is not a description of
+        what was done: it is something the underwriter has to answer, and an answer needs
+        somewhere to be written down.
+        """
+        from .bridge import LEVEL_NAMES
+
+        finding = result.level_finding
+        if finding is None:
+            return
+
+        self.row += 2
+        headline = ("TWO VIEWS OF THE SAME BOOK — THEY AGREE" if finding.agrees else
+                    "TWO VIEWS OF THE SAME BOOK — THEY DO NOT AGREE")
+        self._put(FIRST_COL, headline, title_f, fill=ctrl_fill)
+        self.row += 1
+        self._line(
+            f"The block reports the {LEVEL_NAMES.get(finding.primary, finding.primary)} "
+            f"and the {LEVEL_NAMES.get(finding.secondary, finding.secondary)}. Both "
+            "describe the same portfolio, so each implies an occupancy mix. Neither is "
+            "an error and nothing here fails the run."
+        )
+
+        for i, text in enumerate(["", "from the " + LEVEL_NAMES.get(finding.primary,
+                                                                   finding.primary),
+                                  "from the " + LEVEL_NAMES.get(finding.secondary,
+                                                                finding.secondary),
+                                  "difference"]):
+            self._put(FIRST_COL + i, text, head_f, fill=ctrl_fill)
+        self.row += 1
+        for name, mine, theirs in finding.rows:
+            self._put(FIRST_COL, name, body_f)
+            self._put(FIRST_COL + 1, mine, body_f, "#,##0")
+            self._put(FIRST_COL + 2, theirs, body_f, "#,##0")
+            self._put(FIRST_COL + 3, (theirs - mine) / mine if mine else None,
+                      body_f, "0.0%")
+            self.row += 1
+
+        self._put(FIRST_COL, "Largest difference", ctrl_f)
+        self._put(FIRST_COL + 3, finding.worst, ctrl_f, "0.0%",
+                  fill=None if finding.agrees else ctrl_fill)
+        self.row += 2
+
+        self._line(finding.question)
+        self._put(FIRST_COL, "Answer:", head_f)
+        self._put(FIRST_COL + 1, "", body_f, fill=input_fill)
+        self.row += 2
 
     def _write_aggregate(self, result: Step2Result) -> None:
         """Further step-2 tables, one per declared aggregate — spec §9.2.1 S14."""

@@ -441,8 +441,8 @@ def test_a_reported_occupancy_margin_survives_untouched():
         lambda t: (t * 0.4, t * 0.35, t * 0.25, t),
     )
     nomenclature.axes.append(Axis("07 Wind Aggs", "Cover", ("Building", "Content", "BI")))
-    records, created, notes, _, _ = _split(block, SPEC, block.records, nomenclature,
-                                           blocks)
+    records, created, notes, _, _, finding = _split(
+        block, SPEC, block.records, nomenclature, blocks)
     first = records[0]
     for occupancy in ("Res", "Com", "Ind"):
         parts = sum(first.values[f"{occupancy} {c}"]
@@ -459,8 +459,8 @@ def test_a_reported_cover_margin_survives_untouched():
         lambda t: (t * 0.7, t * 0.2, t * 0.1),
     )
     nomenclature.axes.append(Axis("07 Wind Aggs", "Cover", ("Building", "Content", "BI")))
-    records, created, notes, _, _ = _split(block, SPEC, block.records, nomenclature,
-                                           blocks)
+    records, created, notes, _, _, finding = _split(
+        block, SPEC, block.records, nomenclature, blocks)
     first = records[0]
     for cover in ("Building", "Content", "BI"):
         parts = sum(first.values[f"{o} {cover}"] for o in ("Res", "Com", "Ind"))
@@ -474,8 +474,8 @@ def test_windstorm_sums_the_cover_axis_out_rather_than_discarding_it():
         ["Building", "Content", "BI"],
         lambda t: (t * 0.5, t * 0.2, t * 0.3),        # BI-heavy: commercial/industrial
     )
-    records, created, notes, _, _ = _split(block, SPEC, block.records, nomenclature,
-                                           blocks)
+    records, created, notes, _, _, finding = _split(
+        block, SPEC, block.records, nomenclature, blocks)
     assert set(created) == {"Res", "Com", "Ind"}
     first = records[0]
     total = sum(first.values[c] for c in ("Building", "Content", "BI"))
@@ -497,7 +497,8 @@ def test_both_margins_reported_are_both_preserved_exactly():
         lambda t: (t * 0.4, t * 0.35, t * 0.25, t * 0.7, t * 0.2, t * 0.1),
     )
     nomenclature.axes.append(Axis("07 Wind Aggs", "Cover", ("Building", "Content", "BI")))
-    records, _, notes, _, _ = _split(block, SPEC, block.records, nomenclature, blocks)
+    records, _, notes, _, _, finding = _split(
+        block, SPEC, block.records, nomenclature, blocks)
 
     first = records[0]
     for occupancy in ("Res", "Com", "Ind"):
@@ -532,8 +533,8 @@ def test_a_segmented_report_is_translated_through_the_declared_convention():
     nomenclature, blocks, block = _wind_reporting(
         ["Projects", "Renewables"], lambda t: (t * 0.6, t * 0.4),
     )
-    records, created, notes, _, _ = _split(block, SPEC, block.records, nomenclature,
-                                           blocks)
+    records, created, notes, _, _, finding = _split(
+        block, SPEC, block.records, nomenclature, blocks)
     first = records[0]
     total = first.values["Projects"] + first.values["Renewables"]
     assert sum(first.values[o] for o in ("Res", "Com", "Ind")) == pytest.approx(total)
@@ -557,25 +558,64 @@ def test_the_segment_convention_is_declared_not_coded():
     assert all(r.source == "House convention" for r in projects)
 
 
-def test_a_segment_with_no_declared_mapping_is_fatal():
-    """Without its convention, Renewables is a column nothing knows what to do with —
-    and a column carrying money is never dropped in silence."""
+def test_a_column_belonging_to_no_declared_level_is_fatal():
+    """Without its convention Renewables belongs to no level — it can be neither used
+    nor compared, and a column carrying money is never dropped in silence."""
     nomenclature, blocks, block = _wind_reporting(
         ["Projects", "Renewables"], lambda t: (t * 0.6, t * 0.4),
     )
     nomenclature.splits = [r for r in nomenclature.splits
                            if r.source_category != "Renewables"]
-    with pytest.raises(ExtractionError, match="the split does not consume"):
+    with pytest.raises(ExtractionError, match="belongs to no level"):
         _split(block, SPEC, block.records, nomenclature, blocks)
 
 
-def test_two_levels_at_once_are_refused_rather_than_one_being_dropped():
+# ────────── two views of the same book: a finding and a question, not a refusal
+
+def test_two_levels_at_once_produce_a_finding_not_a_refusal():
+    """The block is built from the richer level; the other is bridged and compared."""
     nomenclature, blocks, block = _wind_reporting(
         ["Res", "Com", "Ind", "Projects"],
         lambda t: (t * 0.4, t * 0.35, t * 0.25, t),
     )
-    with pytest.raises(ExtractionError, match="Projects"):
-        _split(block, SPEC, block.records, nomenclature, blocks)
+    records, created, notes, _, _, finding = _split(
+        block, SPEC, block.records, nomenclature, blocks)
+
+    assert finding is not None
+    # For windstorm the occupancy *is* the target, so the grid is the primary view.
+    assert finding.primary == "reported" and finding.secondary == "segment"
+    assert [r[0] for r in finding.rows] == ["Res", "Com", "Ind"]
+
+    # Built from the occupancy, which is reported: those figures come out untouched.
+    reported = sum(records[0].values[o] for o in ("Res", "Com", "Ind"))
+    assert records[0].values["Res"] == pytest.approx(reported * 0.4)
+    assert created == ()                       # the target was already there
+
+
+def test_the_finding_names_the_gap_and_asks_the_underwriter():
+    nomenclature, blocks, block = _wind_reporting(
+        ["Res", "Com", "Ind", "Projects"],
+        lambda t: (t * 0.4, t * 0.35, t * 0.25, t),
+    )
+    _, _, _, _, _, finding = _split(block, SPEC, block.records, nomenclature, blocks)
+
+    # A wholly residential book against a Projects view that has no residential at all.
+    assert not finding.agrees
+    assert finding.worst > 0.5
+    assert "QUESTION FOR THE UNDERWRITER" in finding.question
+    assert "reported grid" in finding.question
+    assert "Projects/Renewables segmentation" in finding.question
+
+
+def test_two_views_that_agree_raise_no_question():
+    """Projects is half commercial, half industrial — an occupancy split saying the same
+    thing is not a finding."""
+    nomenclature, blocks, block = _wind_reporting(
+        ["Res", "Com", "Ind", "Projects"],
+        lambda t: (0.0, t * 0.5, t * 0.5, t),
+    )
+    _, _, _, _, _, finding = _split(block, SPEC, block.records, nomenclature, blocks)
+    assert finding is not None and finding.agrees
 
 
 # ─────────────────────────────────────────────── what it refuses to do
@@ -588,8 +628,8 @@ def test_a_section_without_an_08_falls_back_to_declared_ratios():
         nomenclature.splits.append(
             SplitRule("07 Wind Aggs", "Occupancy", "", category, share, "Prior year"))
 
-    records, created, notes, _, _ = _split(block, SPEC, block.records, nomenclature,
-                                           blocks)
+    records, created, notes, _, _, finding = _split(
+        block, SPEC, block.records, nomenclature, blocks)
     assert set(created) == {"Res", "Com", "Ind"}
     assert records[0].values["Res"] == pytest.approx(records[0].values["Total"] * 0.38)
     note = next(n for n in notes if "no 08 split table" in n)
@@ -657,3 +697,98 @@ def test_splitting_never_moves_the_zone_total():
     for record in result.records:
         assert sum(record.values[o] for o in ("Res", "Com", "Ind")) == pytest.approx(
             record.values["Total"])
+
+
+def test_the_finding_is_written_into_the_sheet_with_somewhere_to_answer(tmp_path):
+    """A question needs a place for the answer, so step 2 leaves one."""
+    from datatransform.recalc import inject
+
+    source = tmp_path / "two_levels.xlsx"
+    shutil.copy2(MEXICO, source)
+    wb = load_workbook(source)
+    ws = wb["07. Wind Aggs"]
+    for col, label in ((3, "Res"), (4, "Com"), (5, "Ind"), (6, "Projects")):
+        ws.cell(row=18, column=col, value=label)
+    for row in range(19, 61):
+        total = ws.cell(row=row, column=3).value
+        if total is None:
+            continue
+        for col, share in ((3, 0.40), (4, 0.35), (5, 0.25), (6, 1.0)):
+            ws.cell(row=row, column=col, value=round(total * share))
+    wb.save(source)
+    inject(source)
+
+    out = tmp_path / "out.xlsx"
+    report = run(source, out, tmp_path / "logs")
+    assert report.ok, [o.detail for o in report.outcomes if o.status == "error"]
+
+    ws = load_workbook(out, data_only=True)["07. Wind Aggs"]
+    text = [c.value for row in ws.iter_rows() for c in row if isinstance(c.value, str)]
+    assert any("TWO VIEWS OF THE SAME BOOK — THEY DO NOT AGREE" in t for t in text)
+    assert any("QUESTION FOR THE UNDERWRITER" in t for t in text)
+    assert "Answer:" in text                      # an empty cell to write it in
+
+
+# ─────────────────────────── 08 as percentages rather than amounts
+
+def test_a_split_table_of_percentages_reads_the_same_as_amounts():
+    """Only ratios are read, so a table given as shares of the book needs no special
+    handling — it normalises to the same distribution."""
+    nomenclature, blocks = _read()
+    table = next(b for b in blocks if b.dataset.role == "08" and b.section == "Hurricane")
+    before = build_bridge(nomenclature, blocks, "Hurricane", ("Res", "Com", "Ind"),
+                          ("Building", "Content", "BI")).joint()
+
+    grand = sum(r.values[c] for r in table.records
+                for c in ("Building", "Content", "BI"))
+    for record in table.records:
+        for c in ("Building", "Content", "BI"):
+            record.values[c] = record.values[c] / grand * 100.0
+        record.values["Total"] = sum(record.values[c]
+                                     for c in ("Building", "Content", "BI"))
+
+    after = build_bridge(nomenclature, blocks, "Hurricane", ("Res", "Com", "Ind"),
+                         ("Building", "Content", "BI")).joint()
+    for key, share in before.items():
+        assert after[key] == pytest.approx(share)
+
+
+def test_percentages_that_close_per_row_are_read_as_conditionals():
+    """Three rows each summing to 100% are three distributions, not one. Normalising the
+    grid whole would silently assert the three occupancies are equally large."""
+    nomenclature, blocks = _read()
+    table = next(b for b in blocks if b.dataset.role == "08" and b.section == "Hurricane")
+    weights = {}
+    for record in table.records:
+        row = sum(record.values[c] for c in ("Building", "Content", "BI"))
+        weights[record.values["Category"]] = row
+        for c in ("Building", "Content", "BI"):
+            record.values[c] = record.values[c] / row * 100.0
+        record.values["Total"] = row              # the weight lives here and nowhere else
+
+    bridge = build_bridge(nomenclature, blocks, "Hurricane", ("Res", "Com", "Ind"),
+                          ("Building", "Content", "BI"))
+    joint = bridge.joint()
+    grand = sum(weights.values())
+    for occupancy, weight in weights.items():
+        implied = sum(s for (o, _), s in joint.items() if o == occupancy)
+        assert implied == pytest.approx(weight / grand)
+
+
+# ──────────────────────────── the engineering shape is a sheet edit, not a code change
+
+def test_an_engineering_book_needs_no_code_change():
+    """Projects/Renewables as the first axis, cover as the second — declared, not coded."""
+    nomenclature, blocks = _read()
+    nomenclature.axes = [a for a in nomenclature.axes
+                         if a.dataset != "07 Wind Aggs"] + [
+        Axis("07 Wind Aggs", "Segment", ("Projects", "Renewables")),
+    ]
+    assert nomenclature.buckets_for("07 Wind Aggs") == ("Projects", "Renewables")
+
+    # And the second axis is found by position, so renaming "Cover" changes nothing.
+    nomenclature.axes = [
+        Axis("06 EQ Aggs", "Occupancy", ("Res", "Com", "Ind")),
+        Axis("06 EQ Aggs", "Deckungsart", ("Building", "Content", "BI")),
+    ]
+    assert nomenclature.cover_categories() == ("Building", "Content", "BI")

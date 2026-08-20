@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .bridge import build_bridge, fit_margins
+from .bridge import LevelFinding, build_bridge, fit_margins
 from .model import Block, Confidence, ExtractionError, Hypothesis, Record
 from .nomenclature import norm
 from .specs import AggregateSpec, Step2Spec
@@ -50,6 +50,7 @@ class Step2Result:
     aggregates: list[AggregateTable] = field(default_factory=list)
     derived_fields: tuple[str, ...] = ()     # declared fields step 2 read off a label
     assumed_fields: tuple[str, ...] = ()     # fields resting on a declared ratio — §2.6
+    level_finding: object | None = None      # two views of the same book — §2.6
 
     @property
     def confidence(self) -> Confidence:
@@ -223,24 +224,72 @@ def _reported_level(block: Block, occupancy, covers, segments, total: str):
     return "", ()
 
 
-def _refuse_unused_levels(block: Block, targets, total: str, kind: str, labels) -> None:
-    """A reported column the bridge does not consume must never be dropped in silence.
-
-    Two columns describing the same book on different axes is not a level the tool can
-    read — and quietly using one and discarding the other would lose money without
-    leaving a trace, which is the one thing this step must not do.
-    """
+def _unused_levels(block: Block, targets, total: str, kind: str, labels) -> list[str]:
+    """Reported columns the chosen level does not consume."""
     used = set(labels[0] + labels[1]) if kind == "both" else set(labels)
-    unused = [f for f in block.numeric_fields
-              if f not in used and f != total and f not in set(targets)]
-    if unused:
+    return [f for f in block.numeric_fields
+            if f not in used and f != total and f not in set(targets)]
+
+
+def _level_of(field_name: str, occupancy, covers, segments) -> str:
+    for kind, members in (("occupancy", occupancy), ("cover", covers),
+                          ("segment", segments)):
+        if field_name in members:
+            return kind
+    return ""
+
+
+def _reconcile_levels(block: Block, records, bridge, occupancy, covers, segments,
+                      targets, total: str, kind: str, labels):
+    """Two descriptions of the same book — compared, not silently resolved. Spec §2.6.
+
+    A cedent may send the occupancy split *and* a Projects/Renewables split. Each implies
+    an occupancy mix, and nothing in the numbers says which one the cedent stands behind.
+    Choosing one quietly would lose the other without a trace; refusing outright would
+    throw away a perfectly good submission over a question a person can answer in a
+    sentence. So the block is built from the richer level, the other is bridged too, and
+    the two are shown side by side with the question put to the underwriter in writing.
+    """
+    unused = _unused_levels(block, targets, total, kind, labels)
+    if not unused:
+        return None
+
+    kinds = {_level_of(f, occupancy, covers, segments) for f in unused}
+    if not kinds or "" in kinds or len(kinds) > 1:
         raise ExtractionError(
             f"{block.sheet_name!r} block {block.index}: the block reports "
-            f"{', '.join(unused)}, which the split does not consume at the level it "
-            f"chose ({kind or 'none'}). Either that column belongs to a level sheet 00 "
-            "does not declare, or two levels arrived at once — both need saying out "
-            "loud rather than one of them being dropped"
+            f"{', '.join(unused)}, which belongs to no level sheet 00 declares — so it "
+            "can be neither used nor compared, and dropping a column that carries money "
+            "is not something this step will do in silence"
         )
+
+    secondary = kinds.pop()
+    finding = LevelFinding(primary=kind, secondary=secondary,
+                           labels=tuple(occupancy))
+
+    used = labels[0] + labels[1] if kind == "both" else tuple(labels)
+    mine = {o: 0.0 for o in occupancy}
+    theirs = {o: 0.0 for o in occupancy}
+
+    for record in records:
+        if kind == "reported":
+            # The grid itself is the primary view; collapse it onto the occupancy axis.
+            for name in targets:
+                head = next((o for o in occupancy
+                             if name == o or name.startswith(f"{o} ")), None)
+                if head:
+                    mine[head] += _amount(record, name)
+        else:
+            for label in used:
+                level = _level_of(label, occupancy, covers, segments) or "total"
+                for (o, _), share in bridge.distribute(level, label).items():
+                    mine[o] += _amount(record, label) * share
+        for label in unused:
+            for (o, _), share in bridge.distribute(secondary, label).items():
+                theirs[o] += _amount(record, label) * share
+
+    finding.rows = [(o, mine[o], theirs[o]) for o in occupancy]
+    return finding
 
 
 def _split(block: Block, spec: Step2Spec, records, nomenclature, blocks=None):
@@ -256,21 +305,29 @@ def _split(block: Block, spec: Step2Spec, records, nomenclature, blocks=None):
     """
     rule = spec.split
     if rule is None or nomenclature is None:
-        return records, (), [], False, ()
+        return records, (), [], False, (), None
 
     axes = nomenclature.axes_for(block.dataset.key)
     targets = nomenclature.buckets_for(block.dataset.key)
     if not axes or not targets:
-        return records, (), [], False, ()
+        return records, (), [], False, (), None
+    segments = tuple(nomenclature.segment_categories())
+    occupancy = tuple(axes[0].categories)
+    target_covers = tuple(axes[1].categories) if len(axes) > 1 else ()
+
     if all(t in block.fields for t in targets):
         # The finished grid arrived. Any *other* level column describes the same book a
         # second way, and choosing between them silently is not the tool's to do.
-        _refuse_unused_levels(block, targets, rule.total, "reported", targets)
-        return records, (), [], False, ()
-
-    occupancy = tuple(axes[0].categories)
-    target_covers = tuple(axes[1].categories) if len(axes) > 1 else ()
-    segments = tuple(nomenclature.segment_categories())
+        finding = None
+        if _unused_levels(block, targets, rule.total, "reported", targets):
+            bridge = build_bridge(nomenclature, blocks or [], block.section, occupancy,
+                                  target_covers or nomenclature.cover_categories())
+            finding = _reconcile_levels(
+                block, records, bridge, occupancy,
+                bridge.covers if bridge else (), segments, targets, rule.total,
+                "reported", targets,
+            ) if bridge else None
+        return records, (), [], False, (), finding
 
     bridge = build_bridge(nomenclature, blocks or [], block.section,
                           occupancy, target_covers or nomenclature.cover_categories())
@@ -278,7 +335,6 @@ def _split(block: Block, spec: Step2Spec, records, nomenclature, blocks=None):
         return _declared_split(block, spec, records, nomenclature, targets, axes)
 
     kind, labels = _reported_level(block, occupancy, bridge.covers, segments, rule.total)
-    _refuse_unused_levels(block, targets, rule.total, kind, labels)
     if not kind:
         raise ExtractionError(
             f"{block.sheet_name!r} block {block.index}: the source reports none of the "
@@ -296,8 +352,10 @@ def _split(block: Block, spec: Step2Spec, records, nomenclature, blocks=None):
         out.append(Record(record.source_ref, values, record.confidence))
 
     notes.extend(_split_notes(kind, labels, bridge, targets, axes))
+    finding = _reconcile_levels(block, records, bridge, occupancy, bridge.covers,
+                                segments, targets, rule.total, kind, labels)
     created = tuple(t for t in targets if t not in block.fields)
-    return out, created, notes, kind == "total", created
+    return out, created, notes, kind == "total", created, finding
 
 
 def _expand(record, kind: str, labels, bridge, occupancy) -> dict:
@@ -422,7 +480,7 @@ def _declared_split(block, spec, records, nomenclature, targets, axes):
         + (f" [{origin}]" if origin else "")
         + " (value-adding — an assumption, not a reading)",
         "the split redistributes and leaves every zone total unchanged",
-    ], True, created
+    ], True, created, None
 
 
 def _cells_of(name: str, axes) -> list[str]:
@@ -668,7 +726,7 @@ def apply_step2(block: Block, spec: Step2Spec, nomenclature=None, blocks=None) -
     source, bound_fields, gaps = _derive_bounds(block, spec)
     # The split comes first: the identity has nothing to reconcile until the buckets
     # exist, and a zone added as 0 splits to zeros whichever way round it is done.
-    source, split_fields, split_notes, from_total, assumed = _split(
+    source, split_fields, split_notes, from_total, assumed, level_finding = _split(
         block, spec, source, nomenclature, blocks)
     source, total_field, identity_note = _identity(block, spec, source,
                                                    nomenclature, from_total)
@@ -761,6 +819,7 @@ def apply_step2(block: Block, spec: Step2Spec, nomenclature=None, blocks=None) -
         block=block, spec=spec, records=records, computed=computed, notes=notes,
         figures=_derived_figures(block, spec, actual_year), aggregates=aggregates,
         derived_fields=derived_fields, assumed_fields=assumed,
+        level_finding=level_finding,
     )
     if gaps:
         block.hypotheses.append(
