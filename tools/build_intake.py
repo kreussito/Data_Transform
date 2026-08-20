@@ -1293,9 +1293,11 @@ def build_fire_cat_full():
     rate_sheet(
         wb, "09. Rate Development", title="09. Rate Development — underwriter's own",
         blocks_spec=[
+            # Held as percentages of sum insured — 0.118 % is 1.18 per mille. The unit
+            # is never declared and never needs to be: the change is a ratio.
             {"scope": "Fire", "source": "cedent", "basis": "risk-adjusted",
              "years": ["2022", "2023", "2024", "2025", "2026"],
-             "rates": [1.180, 1.215, 1.288, 1.352, 1.406]},
+             "rates": [0.001180, 0.001215, 0.001288, 0.001352, 0.001406]},
             {"scope": "Earthquake + Windstorm", "source": "broker", "basis": "nominal",
              "years": ["2023", "2024", "2025", "2026"],
              "changes": [0.031, 0.042, 0.055, 0.040]},

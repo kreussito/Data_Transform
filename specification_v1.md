@@ -560,6 +560,22 @@ it out and says so:
 Where the source supplies `Rate change` itself, nothing is computed: the underwriter's own
 figure is never replaced by one the tool derived.
 
+**The change is a ratio, and relative — never a difference in percentage points.**
+`0.1215%` after `0.1180%` is **+2.97%**, not +0.0035 points. Those are two different
+quantities and only one of them is a rate change.
+
+Because it is a ratio, **the unit of `Rate` does not matter and is never declared**:
+
+| The source holds | The change comes out |
+|---|---|
+| `0.118 %` of sum insured | +2.97% |
+| `1.18 ‰` — the same rate, another convention | +2.97% |
+| `1.180` — no unit at all | +2.97% |
+
+That is worth having deliberately. A `Rate unit` attribute would be one more thing to
+declare, one more thing to get wrong, and it would buy nothing: the arithmetic is
+invariant under any common scaling, so an answer could only ever be redundant or false.
+
 **A rate is a number but not a quantity.** The sum of five years' rates is not a rate, and
 a total of five rate *changes* is not a change. Both are therefore left out of the control
 sums, exactly as band bounds are (§2.4) — a meaningless figure in the control row invites
@@ -1847,6 +1863,7 @@ already in `⟦GLOBAL⟧`, where the underwriter can see it beside the figures i
 | T5 | A run may not write over its own source: the source is the audit baseline, and an output path equal to it is refused |
 | T6 | **One third-party package**, `openpyxl`. Everything else is the standard library, and no external program — Excel included — is needed to read or write a workbook |
 | T7 | Every text file the tool writes declares **UTF-8** explicitly, and the console streams are put into UTF-8 before the first line is printed |
+| T8 | A figure is written **as the source displayed it**: the cell's own number format is carried across, and only where the source says nothing does the declared type decide |
 
 T2 exists because a silently zeroed error cell reaches an underwriter under a
 clean-looking control sum.
@@ -1857,6 +1874,16 @@ absent source files, which resolve to stale caches or `#REF!`.
 T6 is what makes "copy the folder onto the machine" a real installation route. Underwriting
 desktops are locked down; a tool needing a database or a compiler does not get installed,
 and one needing Excel automation cannot run unattended.
+
+**T8.** `⟦TYPES⟧` says a rate is a *number*, which is true and not enough: under the
+default amount format `0.00118` reads as `0`. Only the source knows whether a number is
+an amount, a percentage or a rate per mille, and it says so in the cell's own format.
+Carrying that across is not interpretation — writing the rate as `0` would be. A column
+step 2 derived has no source cell, so the rule that derived it says how it reads.
+
+This is the narrow, observed half of P2 in §13.1. The parked item is a *declared* number
+format for reading ambiguous decimals; this is about writing, and it needs nothing
+declared at all.
 
 **T7 and Windows.** The tool's own vocabulary is not ASCII — `⟦…⟧` anchors the blocks of
 sheet `00`, notes use `→` and `·` — and none of those exist in **cp1252**, which is still

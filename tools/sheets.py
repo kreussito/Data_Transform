@@ -364,7 +364,7 @@ def rate_sheet(wb, name, *, title, blocks_spec):
         declared = {"B": "Year"}
         source = {"B": "U/W year"}
         if spec.get("rates"):
-            declared["C"], source["C"] = "Rate", "Rate %o"
+            declared["C"], source["C"] = "Rate", "Tasa %"
         if spec.get("changes"):
             col = "D" if spec.get("rates") else "C"
             declared[col], source[col] = "Rate change", "Change vs prior"
@@ -381,7 +381,7 @@ def rate_sheet(wb, name, *, title, blocks_spec):
         end = record_block(
             ws, header_row=row, selector_col="G",
             source_labels=source, declared=declared, rows=rows,
-            formats={c: "0.000" if declared.get(c) == "Rate" else "0.0%"
+            formats={c: "0.0000%" if declared.get(c) == "Rate" else "0.0%"
                      for c in "CD" if c in declared},
             note_col="H", total_cols=[],
         )

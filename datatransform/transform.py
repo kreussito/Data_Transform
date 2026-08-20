@@ -637,8 +637,12 @@ def _changes(records, spec: Step2Spec, block: Block):
 
         computed[rule.name] = column
         derived.append(rule.name)
+        block.display_formats.setdefault(rule.name, rule.number_format)
         notes.append(
-            f"{rule.name} worked out from {rule.field}: each year against the one before "
+            f"{rule.name} worked out from {rule.field}: each year against the one "
+            f"before, as a **ratio** — so the unit of {rule.field} does not matter "
+            f"(%, ‰ or a bare number all give the same change), and the result is a "
+            f"relative movement, never a difference in percentage points "
             f"(value-adding — the source gives the level, not the movement)"
         )
         if gaps:

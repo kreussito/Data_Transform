@@ -160,6 +160,7 @@ class Block:
     claimed_elsewhere: int = 0            # rows another block on this sheet extracts
     claimed_by: list[str] = field(default_factory=list)
     unextracted: list[str] = field(default_factory=list)
+    display_formats: dict[str, str] = field(default_factory=dict)
 
     @property
     def confidence(self) -> Confidence:
@@ -199,7 +200,17 @@ class Block:
         return tuple(f for f in self.numeric_fields if f not in excluded)
 
     def number_format(self, label: str) -> str:
-        return self.field_types.get(label, FieldType.NUMBER).number_format
+        """How to display a figure — as the source displayed it, or as step 2 says.
+
+        The declared type gives a sensible default, but only the source knows whether a
+        number is an amount, a percentage or a rate per mille. Carrying its format across
+        is not interpretation; writing 0.00118 as ``0`` would be. A column step 2 derived
+        has no source cell, so the rule that derived it says how it reads.
+        """
+        declared = self.field_types.get(label, FieldType.NUMBER)
+        if declared is FieldType.NUMBER and label in self.display_formats:
+            return self.display_formats[label]
+        return declared.number_format
 
     def totals(self) -> dict[str, float]:
         return {

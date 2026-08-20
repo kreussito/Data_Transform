@@ -78,6 +78,56 @@ def test_the_change_is_worked_out_from_the_levels():
     assert any("worked out from Rate" in n for n in result.notes)
 
 
+@pytest.mark.parametrize("unit,factor", [
+    ("percent", 1.0),          # what the pack holds: 0.118 % of sum insured
+    ("per mille", 10.0),       # 1.18 ‰ — the same rate, another convention
+    ("bare number", 1000.0),   # 1.180, no unit at all
+])
+def test_the_change_does_not_care_what_unit_the_rate_is_in(unit, factor):
+    """A ratio cannot care. That is why the unit of Rate is never declared: it does not
+    have to be, and asking for it would invite an answer that could be wrong."""
+    nomenclature, blocks = _read()
+    fire = _rate_blocks(blocks)[0]
+    for record in fire.records:
+        record.values["Rate"] = record.values["Rate"] * factor
+
+    result = apply_step2(fire, step2_for(fire.dataset.key), nomenclature, blocks)
+    changes = [r.values.get("Rate change") for r in result.records]
+    assert changes[1] == pytest.approx(0.029661, abs=1e-6), unit
+    assert changes[-1] == pytest.approx(0.039941, abs=1e-6), unit
+
+
+def test_the_change_is_relative_never_a_difference_in_points():
+    """0.1215 % after 0.1180 % is +2.97 %, not +0.0035 points. The two are different
+    quantities and only one of them is a rate change."""
+    nomenclature, blocks = _read()
+    fire = _rate_blocks(blocks)[0]
+    result = apply_step2(fire, step2_for(fire.dataset.key), nomenclature, blocks)
+
+    rates = [r.values["Rate"] for r in result.records]
+    changes = [r.values.get("Rate change") for r in result.records]
+    assert changes[1] == pytest.approx(rates[1] / rates[0] - 1)
+    assert changes[1] != pytest.approx(rates[1] - rates[0])
+    assert any("as a **ratio**" in n and "never a difference in percentage points" in n
+               for n in result.notes)
+
+
+def test_a_rate_is_displayed_the_way_the_source_displayed_it():
+    """0.00118 under the default amount format reads as 0. The source cell says it is a
+    percentage, and carrying that across is refusing to re-interpret."""
+    _, blocks = _read()
+    fire = _rate_blocks(blocks)[0]
+    assert "%" in fire.number_format("Rate")
+    assert fire.display_formats["Rate"] == "0.0000%"
+
+
+def test_a_derived_column_is_displayed_as_its_rule_says():
+    nomenclature, blocks = _read()
+    fire = _rate_blocks(blocks)[0]
+    apply_step2(fire, step2_for(fire.dataset.key), nomenclature, blocks)
+    assert fire.number_format("Rate change") == "0.0%"
+
+
 def test_a_reported_change_is_never_overwritten():
     nomenclature, blocks = _read()
     cat = _rate_blocks(blocks)[1]
@@ -237,3 +287,17 @@ def test_the_process_log_records_both_scopes(tmp_path):
     assert "Claimed rate change against implied (§10.5)" in text
     assert "Earthquake + Windstorm [broker]" in text
     assert "Fire — NOT EVALUATED" in text
+
+
+def test_the_written_rate_column_is_a_percentage_not_a_zero(tmp_path):
+    """The whole point of carrying the format: a rate written with #,##0 reads as 0."""
+    source = tmp_path / FULL.name
+    shutil.copy2(FULL, source)
+    out = tmp_path / "out.xlsx"
+    run(source, out, tmp_path / "logs")
+
+    ws = load_workbook(out, data_only=True)["09. Rate Development"]
+    rates = [c for row in ws.iter_rows() for c in row
+             if isinstance(c.value, float) and 0.0005 < c.value < 0.002]
+    assert rates, "the rate levels should be in the output"
+    assert all("%" in c.number_format for c in rates)

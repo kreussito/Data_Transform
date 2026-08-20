@@ -46,6 +46,24 @@ def _is_error(value) -> bool:
     return isinstance(value, str) and value.strip() in ERROR_CELLS
 
 
+GENERAL_FORMATS = {"General", "@", ""}
+
+
+def _note_format(block, label: str, cell) -> None:
+    """Remember how the source displayed a figure, so the output can display it the same.
+
+    A rate of 0.00118 under the default amount format reads as ``0``. The source knows it
+    is a percentage — it says so in the cell's own number format — and carrying that
+    across is not interpretation: it is refusing to *re*-interpret. The first formatted
+    cell of a column wins; ``General`` is no information and is ignored.
+    """
+    if label in block.display_formats:
+        return
+    fmt = getattr(cell, "number_format", None)
+    if fmt and fmt not in GENERAL_FORMATS:
+        block.display_formats[label] = fmt
+
+
 def _check_cell(values_ws, formulas_ws, row: int, col: int, where: str):
     """Spec §7.2 (uncalculated formulas) and §12 T2 (error cells)."""
     v = values_ws.cell(row=row, column=col).value
@@ -452,6 +470,7 @@ def _select_rows(block: Block, values_ws, formulas_ws, limit_row, limit_col, whe
             values[label] = coerce(raw, block.field_types[label], label,
                                    f"{col}{row}", block.coercions,
                                    date_format.value if date_format else None)
+            _note_format(block, label, values_ws.cell(row=row, column=col_idx(col)))
         block.records.append(Record(source_ref=str(row), values=values))
 
     extracted = {col_idx(c) for c in block.address_map.values()}
