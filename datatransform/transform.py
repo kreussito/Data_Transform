@@ -600,6 +600,64 @@ def _identity(block: Block, spec: Step2Spec, records, nomenclature=None,
     )
 
 
+def _changes(records, spec: Step2Spec, block: Block):
+    """Columns derived from the record *before* — spec §2.7, S21.
+
+    A rate change is what the rate did since last year, so unlike every other derivation
+    in step 2 it looks along the sequence rather than inside a record. The records are
+    already sorted by the time this runs, which is what makes "the one before" mean
+    anything at all.
+
+    Where the source already supplies the column, nothing happens: the underwriter's own
+    figure is never replaced by one the tool worked out.
+    """
+    computed, notes, derived = {}, [], []
+    for rule in spec.changes:
+        if rule.name in block.fields:
+            notes.append(
+                f"{rule.name} as reported — {rule.field} was not used to work it out"
+            )
+            continue
+        if rule.field not in block.fields:
+            continue                       # neither column: nothing to say, nothing to do
+
+        column, gaps, previous = [], [], None
+        for record in records:
+            value = record.values.get(rule.field)
+            key = norm(record.values.get(rule.key))
+            if not isinstance(value, (int, float)) or previous is None:
+                column.append(None)
+            else:
+                column.append(value / previous[1] - 1 if previous[1] else None)
+                if _year_gap(previous[0], key) > 1:
+                    gaps.append(f"{previous[0]}→{key}")
+            record.values[rule.name] = column[-1]
+            if isinstance(value, (int, float)):
+                previous = (key, value)
+
+        computed[rule.name] = column
+        derived.append(rule.name)
+        notes.append(
+            f"{rule.name} worked out from {rule.field}: each year against the one before "
+            f"(value-adding — the source gives the level, not the movement)"
+        )
+        if gaps:
+            notes.append(
+                f"{rule.name} spans more than one year at {', '.join(gaps)} — the "
+                f"{rule.key.lower()}s are not consecutive there, so those figures are not "
+                "annual changes and must not be read as such"
+            )
+    return computed, notes, tuple(derived)
+
+
+def _year_gap(a: str, b: str) -> int:
+    """How many years apart two keys are; 1 where they cannot be read as numbers."""
+    try:
+        return int(float(b)) - int(float(a))
+    except (TypeError, ValueError):
+        return 1
+
+
 def _cumulative(records, spec: Step2Spec) -> dict[str, list[float | None]]:
     """Running share of each column's total — spec §9.2.1 S17."""
     out = {}
@@ -766,6 +824,9 @@ def apply_step2(block: Block, spec: Step2Spec, nomenclature=None, blocks=None) -
                 column.append(None)
         computed[calc.name] = column
 
+    change_columns, change_notes, change_fields = _changes(records, spec, block)
+    computed.update(change_columns)
+    derived_fields += change_fields
     computed.update(_cumulative(records, spec))
 
     sort_note = (f"sorted by {', '.join(spec.sort_by)} "
@@ -795,6 +856,7 @@ def apply_step2(block: Block, spec: Step2Spec, nomenclature=None, blocks=None) -
     available = set(block.fields) | set(derived_fields)
     shown_columns = [h for h in block.dataset.headers if h in available]
     notes.extend(split_notes)
+    notes.extend(change_notes)
     if identity_note:
         notes.append(identity_note)
     if filled:

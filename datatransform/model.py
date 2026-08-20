@@ -187,13 +187,15 @@ class Block:
         A band bound is a number, but summing the lower edges of a risk profile produces
         a figure that means nothing and would sit in the control row inviting a reader to
         interpret it. Bounds order and compare records; they are not quantities of
-        anything — spec §2.4.
+        anything — spec §2.4. A rate is the same kind of number: the sum of five years'
+        rates is not a rate, and a total of five rate *changes* is not a change.
         """
         from .specs import step2_for
 
         spec = step2_for(self.dataset.key)
         bounds = getattr(spec, "bounds", None) if spec else None
         excluded = {bounds.lower, bounds.upper} if bounds else set()
+        excluded |= set(getattr(spec, "not_summable", ()) if spec else ())
         return tuple(f for f in self.numeric_fields if f not in excluded)
 
     def number_format(self, label: str) -> str:

@@ -6,7 +6,7 @@ Excel, driven by metadata declared in the workbook itself.
 | | |
 |---|---|
 | **Version** | 1 |
-| **Status** | `00`–`07` implemented, per-risk and cat sections; `08`–`10` outstanding |
+| **Status** | `00`–`09` implemented, per-risk and cat sections; `10`–`11` outstanding |
 | **Cadence** | Once per treaty, per year |
 | **Reference workbooks** | `Intake_v1.xlsx` · `Intake_Engineering_v1.xlsx` · `Intake_EngineeringCombined_v1.xlsx` · `Intake_FireCat_v1.xlsx` · `Intake_FireEQWind_v1.xlsx` · `Intake_FireCatLosses_v1.xlsx` · `Intake_FireCatFull_v1.xlsx` · `Intake_Mexico_v1.xlsx` |
 
@@ -51,7 +51,7 @@ is written as a visible block with control sums that tie back to the step before
 | `06. EQ Aggs` | Earthquake sums insured per cat zone, §2.5 | **implemented** |
 | `07. Wind Aggs` | Windstorm sums insured per cat zone, §2.5 | **implemented** |
 | `08. Splits` | The cedent's book split — sums insured, one block per section; the ratio source for `06`/`07`, §2.6 | **implemented** |
-| `09. Rate Development` | Rate change history — optional | outstanding |
+| `09. Rate Development` | The rate change a submission **claims** — the underwriter's own sheet, §2.7 | **implemented**, optional |
 | `10. Triangles` | Loss development triangles | outstanding |
 | `11. Exchange rates` | FX rates for conversion between currencies | outstanding |
 | `20. Summary` | Collected step-2 blocks | outstanding, **generated** |
@@ -535,6 +535,58 @@ A split redistributes and never creates: the zone total is unchanged, so control
 and §10.4 reads the same figures whether or not a split ran. Value-adding in detail,
 value-preserving in sum.
 
+### 2.7 Sheet 09 — the claimed rate change
+
+`09` is the first dataset that is **not the cedent's**. The underwriter types it in, from
+a quote, a broker note or their own estimate, because gathering rate history is a slow
+manual business and the figure often exists nowhere in the submission. Everything else
+follows from that.
+
+| Field | Type | |
+|---|---|---|
+| `Year` | text | the renewal year the change belongs to |
+| `Rate` | number | the rate level itself — **optional** |
+| `Rate change` | number | the movement since the year before — **optional** |
+
+**Either column may be the one that arrived.** Given the changes, the levels cannot be
+recovered — there is no base. Given the levels, the change is arithmetic, so step 2 works
+it out and says so:
+
+```
+· Rate change worked out from Rate: each year against the one before
+  (value-adding — the source gives the level, not the movement)
+```
+
+Where the source supplies `Rate change` itself, nothing is computed: the underwriter's own
+figure is never replaced by one the tool derived.
+
+**A rate is a number but not a quantity.** The sum of five years' rates is not a rate, and
+a total of five rate *changes* is not a change. Both are therefore left out of the control
+sums, exactly as band bounds are (§2.4) — a meaningless figure in the control row invites
+a reader to interpret it.
+
+**Consecutive years matter.** A change is annual only if the years are. Where the source
+skips one, the figure spans two years and the block says so rather than letting it read
+as an annual movement.
+
+#### `Scope` — one section, or several
+
+A nat cat programme is usually quoted as **one** rate for earthquake and windstorm
+together. No `Section` attribute can say that, so `09` blocks declare a `Scope`:
+
+```
+Scope = Fire
+Scope = Earthquake + Windstorm
+```
+
+Every part is checked against `⟦SECTIONS⟧`, and a name it does not declare is fatal — a
+rate compared against the wrong book is worse than no comparison at all.
+
+`Source` — `cedent` · `broker` · `underwriter estimate` — records where the figure came
+from, for the same reason `⟦SPLITS⟧` carries one: this number is not in the audit
+baseline, and how much it is worth depends on who said it. `Rate change basis` says
+whether it is nominal or risk-adjusted.
+
 ---
 
 ## 3 · Sheet 00 — the nomenclature
@@ -600,6 +652,7 @@ anchor rather than by position.
 | `Loss share warning` | `20%` |
 | `Rate change warning` | `20%` |
 | `Split view warning` | `2%` |
+| `Rate claim warning` | `5%` |
 
 `Actual year` is **N**, the expiring year; the renewal being underwritten is **N+1**.
 Every `{N}` reference in `⟦RULES⟧` and in the step-2 figures resolves from it.
@@ -612,7 +665,7 @@ should not need the tool changed to get it.
 `Rate change warning` is the same idea for §10.4: the movement in premium per unit of
 exposure beyond which the growth block raises a warning. `Split view warning` is the
 third: how far apart two descriptions of the same book may be before §2.6 calls it a
-disagreement. All three are read the same way — `20%`, `20` and `0.2` all mean twenty per
+disagreement. All four are read the same way — `20%`, `20` and `0.2` all mean twenty per
 cent, since a share above 1 can only have been meant as a percentage — and the first two
 default to 20%, the third to 2%.
 
@@ -1163,6 +1216,7 @@ sums tying back to step 1.
 | **S17** | A dataset may declare **cumulative** columns: a running share of a measure's total | value-adding |
 | **S18** | A dataset may declare its key **complete** against a catalogue in `00`. Keys the source omits are written with every measure at 0 | value-preserving |
 | **S19** | A dataset may declare a field as the **identity** of others: supplied, it is checked against them and the verdict recorded; absent, it is derived as their sum | check / value-adding |
+| **S21** | A dataset may declare a **change** column: derived from the same field on the previous record, where the source gives the level and not the movement | value-adding |
 | **S20** | A dataset may declare **target cells**. A source reporting on any other axis is bridged onto them using ratios read from `08`, or declared in `⟦SPLITS⟧` where no cedent can supply them | value-adding in detail, value-preserving in sum |
 
 **S14.** `03. Large Losses` emits the claim detail and then, beneath it, the annual sum:
@@ -1605,6 +1659,70 @@ one they would merely repeat the total.
 The status word is `within limits`, never `OK`: step 1 and step 2 already write an
 `OK`/`MISMATCH` control check, and one word must not mean two things on one sheet.
 
+### 10.5 The claimed rate change against the implied one
+
+§10.4 works out an implied rate change from the two things a submission cannot fake.
+`09` carries the claimed one. Neither is the truth; where they agree the renewal rests on
+something, and where they do not, the gap is the conversation.
+
+**The gap is measured in percentage points**, because both sides are already changes:
++4.0% claimed against −4.1% implied is a gap of 8.1 points. Calling that "198%" would be
+arithmetic without meaning. The threshold is `Rate claim warning` in `⟦GLOBAL⟧`, 5 points
+by default.
+
+**Nothing here fails a run.** The two figures measure the book differently — one may be
+risk-adjusted, renewal-only, or net of commission — so a gap is a *finding with a
+question*, written under the rate sheet with somewhere to answer:
+
+```
+CLAIMED RATE CHANGE AGAINST IMPLIED — EARTHQUAKE + WINDSTORM
+Scope covers Earthquake and Windstorm, so the two are combined: premium adds, but
+exposure does not — a coastal risk sits in both aggregates. Only the *growth* is
+used, in which a stable double count cancels, so the sum of the aggregates is never
+read as a portfolio figure.
+
+  Section       premium growth   exposure growth
+  Earthquake             +9.0%            +12.8%
+  Windstorm              +7.6%            +12.8%
+
+  Premium growth                          +8.2%
+  Exposure growth                        +12.8%
+  Implied rate change                      -4.1%
+  Claimed rate change, 2026                +4.0%
+  Gap (percentage points)                  +8.1%
+  Status                                 WARNING
+
+QUESTION FOR THE UNDERWRITER: the claimed rate change is 8.1% above what premium and
+exposure imply. Either the claim is measured on a different basis — risk-adjusted,
+renewal-only, net of commission — or one of the two figures is wrong. Which is it?
+Answer:  ▁▁▁▁▁▁▁▁▁▁
+```
+
+#### Combining two sections, and why it is allowed
+
+This is the one piece of arithmetic here that is not obvious.
+
+**Premium adds.** Earthquake premium plus windstorm premium is the nat cat premium;
+nothing is counted twice. So the combined premium growth is the ratio of the two sums,
+not the mean of the two ratios.
+
+**Exposure does not add.** A coastal hotel sits in the earthquake aggregate *and* in the
+windstorm one. Their sum is not a portfolio figure and must never be read as one.
+
+But the implied rate uses only *growth*, never a level — and the growth of the sum is the
+exposure-weighted mean of the two growths, in which a stable double count cancels. So the
+combination is legitimate **precisely because it never looks at the total**, and the
+written block says so, in case someone later tries to carry the figure further.
+
+#### What it will not do
+
+A scope with no exposure behind it — Fire, which has no cat aggregate — is shown
+**unchecked rather than dropped**. The claim is still worth seeing; what is missing is
+the thing to hold it against, and saying that is more useful than silence.
+
+Comparing `05`'s premium against `01` would give Fire an implied rate too. That is P1 in
+§13.1, parked, and this is now the second place it would pay off.
+
 ### 10.4 Exposure growth against premium growth
 
 Like §10.3 this is a group check rather than a `⟦RULES⟧` line, because it spans three
@@ -1772,6 +1890,10 @@ Resolved:
 | Dataset with no step-2 spec | **Nothing written**, run reports an error — §9.1 O7 |
 | Loss-share threshold | **20%**, declared in `⟦GLOBAL⟧` so an underwriter can change it |
 | Rate-change threshold | **20%**, likewise — §10.4 |
+| Rate-claim threshold | **5 percentage points** — §10.5 |
+| Who supplies `09` | **The underwriter**, not the cedent. Gathering rate history is slow manual work, so the figure often exists nowhere in the submission — `Source` records who said it |
+| `09` given as rate levels | **The change is derived** from one year to the next; given the change, the levels are not recoverable, so that direction only |
+| A rate in a control sum | **Never.** Five years' rates do not add up to a rate — §2.4's rule applied to §2.7 |
 | Header register width | **Read from row 4**, not fixed at ten columns; older packs fall back to `D … M` — §3.1 |
 | `06` vs `07` | **No rule compares them.** Either peril can be bought alone, and the covered books need not match — §2.5 |
 | Zones with no exposure | **Written as 0.** Where the cedent already sends them, step 1 shows them; where it does not, step 2 completes from `⟦ZONES⟧` — an absent row is silence, a zero is an answer |
@@ -1795,8 +1917,7 @@ cleanly in every case, and none is worth building before the decision behind it 
 
 Remaining:
 
-1. **Datasets `09`–`11`.** Header labels and attributes not yet specified. `08`'s axes
-   are settled (§2.1) and its split machinery is shared with `06`/`07` (§2.6).
+1. **Datasets `10`–`11`.** Header labels and attributes not yet specified.
 2. **Sheet `08`'s measures.** What is *counted* at each intersection — risk count,
    sum insured, premium — is the last open question on `08`.
 3. **Sheet `20. Summary`.** Specified in §9.1 O6 but not yet implemented; it needs at
@@ -1863,7 +1984,7 @@ Eight treaty shapes, generated by `tools/build_v1.py`, `tools/build_intake.py` a
 | `Intake_FireCat_v1.xlsx` | Fire, Earthquake, Windstorm | the two cat sections **share one sheet** |
 | `Intake_FireEQWind_v1.xlsx` | Fire, Earthquake, Windstorm | **a sheet per section** |
 | `Intake_FireCatLosses_v1.xlsx` | Fire, Earthquake, Windstorm | **only `01`, `02` and `04`** — the money and the events. Fire declares no loss dataset, so R-01/R-09 are *not applicable* rather than failed |
-| `Intake_FireCatFull_v1.xlsx` | Fire, Earthquake, Windstorm | **the whole chain, 15 sheets**: every dataset `01`–`08`, both §10.3 groups, both §10.4 tables, and the two halves of the §2.6 bridge on one workbook |
+| `Intake_FireCatFull_v1.xlsx` | Fire, Earthquake, Windstorm | **the whole chain, 16 sheets**: every dataset `01`–`09`, both §10.3 groups, both §10.4 tables, the two halves of the §2.6 bridge, and §10.5's combined scope |
 | `Intake_Mexico_v1.xlsx` | Earthquake, Hurricane | the **cat aggregates** — eleven headers, `⟦ZONES⟧`, three versions per sheet, §10.4 |
 
 `Intake_FireCat_v1.xlsx` and `Intake_FireEQWind_v1.xlsx` carry identical figures and are

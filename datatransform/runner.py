@@ -13,6 +13,7 @@ from openpyxl import load_workbook
 
 from .constants import (
     FAILED,
+    WARNING,
     LOG_RULE_WIDTH,
     M_HEADER,
     NOT_AVAILABLE,
@@ -22,6 +23,7 @@ from .constants import (
 from .crosschecks import hypotheses_from, results_for, run_rules
 from .extract import _number_hypotheses, extract_sheet, last_non_empty_row
 from .growth import growth_tables
+from .ratechange import rate_claims
 from .lossshare import EXCEEDS, OK, loss_share_tables
 from .markers import read_markers
 from .model import Block, ExtractionError
@@ -29,7 +31,7 @@ from .nomenclature import Nomenclature, read_nomenclature, sheet_sort_key
 from .recalc import inject
 from .specs import SPEC_VERSION, step2_for
 from .transform import Step2Result, apply_step2
-from .writer import write_blocks, write_growth, write_loss_share
+from .writer import write_blocks, write_growth, write_loss_share, write_rate_claim
 
 TOOL_VERSION = VERSION
 
@@ -53,6 +55,7 @@ class RunReport:
     rule_results: list = field(default_factory=list)
     loss_share: list = field(default_factory=list)
     growth: list = field(default_factory=list)
+    rate_claims: list = field(default_factory=list)
     injected: int = 0
 
     @property
@@ -214,6 +217,15 @@ def run(source: str | Path, output: str | Path | None = None,
             if sheet in out_wb.sheetnames:
                 formula_values.extend(write_growth(out_wb[sheet], table))
 
+    # Pass 5 — the claimed rate change against the implied one. It needs pass 4's answer,
+    # so it can only run after it — spec §10.5.
+    report.rate_claims = rate_claims(nomenclature, blocks, report.growth)
+    _log_rate_claims(report.rate_claims, debug, process)
+    for claim in report.rate_claims:
+        for sheet in claim.sheets:
+            if sheet in out_wb.sheetnames:
+                formula_values.extend(write_rate_claim(out_wb[sheet], claim))
+
     out_wb.save(output)
     result = inject(output, formula_values)
     report.injected = result["injected"]
@@ -298,6 +310,32 @@ def _log_rules(results, nomenclature, debug, process) -> None:
                      r.label, r.status.upper(), r.rule.left, r.rule.relation,
                      r.rule.right, r.detail)
         debug.info("rule %s: %s (%s)", r.label, r.status, r.detail)
+
+
+def _log_rate_claims(claims, debug, process) -> None:
+    """§10.5 — what the submission claims, against what the figures imply."""
+    if not claims:
+        return
+    process.info("")
+    process.info("Claimed rate change against implied (§10.5)")
+    for claim in claims:
+        scope = " + ".join(claim.scope) or "no scope"
+        if claim.skipped:
+            process.info("  %s — NOT EVALUATED: %s", scope, claim.skipped)
+            continue
+        process.info("  %s [%s] — written at the end of %s",
+                     scope, claim.source or "source not stated", claim.sheets[0])
+        for section, premium, exposure in claim.parts if claim.combined else []:
+            process.info("    %-16s premium %s · exposure %s", section,
+                         NOT_AVAILABLE if premium is None else f"{premium:+.1%}",
+                         NOT_AVAILABLE if exposure is None else f"{exposure:+.1%}")
+        process.info("    claimed %s · implied %s · gap %s  [%s]",
+                     NOT_AVAILABLE if claim.claimed is None else f"{claim.claimed:+.1%}",
+                     NOT_AVAILABLE if claim.implied is None else f"{claim.implied:+.1%}",
+                     NOT_AVAILABLE if claim.gap is None else f"{claim.gap:+.1%}",
+                     claim.status)
+        if claim.status == WARNING:
+            debug.warning("rate claim %s: gap %s", scope, claim.gap)
 
 
 def _log_growth(tables, debug, process) -> None:

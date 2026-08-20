@@ -38,6 +38,7 @@ ROLE_PROFILE = "05"
 ROLE_EQ_AGGS = "06"
 ROLE_WIND_AGGS = "07"
 ROLE_SPLITS = "08"
+ROLE_RATE = "09"
 
 LOSS_ROLES = (ROLE_LARGE, ROLE_CAT)              # §10.3 — what is summed
 EXPOSURE_ROLES = (ROLE_EQ_AGGS, ROLE_WIND_AGGS)  # §10.4 — what carries an aggregate
@@ -54,6 +55,8 @@ F_TOTAL = "Total"
 F_ZONE = "Zone"
 F_CATEGORY = "Category"
 F_EXPOSURE = "Exposure"
+F_RATE = "Rate"                  # the rate level itself, in % — 09
+F_RATE_CHANGE = "Rate change"    # the movement between two years — 09
 
 # ── attributes ────────────────────────────────────────────────────────────────
 A_SECTION = "Section"
@@ -64,6 +67,14 @@ A_AS_AT = "As at"
 A_LOSS_BASIS = "Loss basis"
 A_SHARE_BASIS = "Share basis"
 A_PREMIUM_BASIS = "Premium basis"
+
+# 09 is the first dataset that is not the cedent's. The underwriter types it in, from a
+# quote, a broker note or their own estimate — so where it came from is itself worth
+# recording, and ``Scope`` may name several sections at once because a nat cat programme
+# is often quoted as one rate.
+A_SCOPE = "Scope"
+A_SOURCE = "Source"
+SCOPE_JOIN = "+"
 
 # ── the three declared thresholds ─────────────────────────────────────────────
 # Each is an ⟦GLOBAL⟧ attribute with a fallback. The fallback is the tool's opinion; the
@@ -76,6 +87,11 @@ RATE_CHANGE_DEFAULT = 0.20
 
 SPLIT_VIEW_WARNING = "Split view warning"
 SPLIT_VIEW_DEFAULT = 0.02
+
+# §10.5 compares two rate *changes*, so the gap between them is measured in percentage
+# points, not as a ratio. A claimed +4% against an implied −3.4% is a gap of 7.4 points.
+RATE_CLAIM_WARNING = "Rate claim warning"
+RATE_CLAIM_DEFAULT = 0.05
 
 PERCENT = re.compile(r"^\s*([0-9.,]+)\s*%\s*$")
 

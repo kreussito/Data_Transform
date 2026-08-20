@@ -32,7 +32,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sheets import (  # noqa: E402
     ATTRS_06, ATTRS_08, BUCKETS, COVER, HEADERS_06, HEADERS_07, HEADERS_08,
-    OCCUPANCY, SEGMENTS, aggregate_sheet, check_catalogue, split_sheet,
+    ATTRS_09, HEADERS_09, OCCUPANCY, SEGMENTS, aggregate_sheet,
+    check_catalogue, rate_sheet, split_sheet,
     block_header,
     blue,
     body_f,
@@ -1200,9 +1201,9 @@ def build_fire_cat_full():
     wb = Workbook()
     wb.remove(wb.active)
     sections = [
-        ("Fire", "per risk", ["01", "02", "03", "05", "08"]),
-        ("Earthquake", "cat", ["01", "02", "04", "06", "08"]),
-        ("Windstorm", "cat", ["01", "02", "04", "07", "08"]),
+        ("Fire", "per risk", ["01", "02", "03", "05", "08", "09"]),
+        ("Earthquake", "cat", ["01", "02", "04", "06", "08", "09"]),
+        ("Windstorm", "cat", ["01", "02", "04", "07", "08", "09"]),
     ]
     datasets = [
         ("01. History Fire", "01 History Fire", HEADERS_01, ATTRS_01),
@@ -1220,11 +1221,15 @@ def build_fire_cat_full():
         ("08. Splits Fire", "08 Splits Fire", HEADERS_08, ATTRS_08),
         ("08. Splits EQ", "08 Splits EQ", HEADERS_08, ATTRS_08),
         ("08. Splits Wind", "08 Splits Wind", HEADERS_08, ATTRS_08),
+        ("09. Rate Development", "09 Rate", HEADERS_09, ATTRS_09),
     ]
-    types = TYPES + [("Zone", "text"), ("Category", "text"), ("Total", "number")] + \
+    types = TYPES + [("Zone", "text"), ("Category", "text"), ("Total", "number"),
+                     ("Rate", "number"), ("Rate change", "number")] + \
         [(b, "number") for b in BUCKETS] + [(o, "number") for o in OCCUPANCY] + \
         [(c, "number") for c in COVER] + [(s, "number") for s in SEGMENTS]
     vocabulary = VOCABULARY + [
+        ("Source", "cedent | broker | underwriter estimate"),
+        ("Rate change basis", "nominal | risk-adjusted"),
         ("Zone scheme", "EU EQ | EU Wind"),
         ("Coinsurance", "deducted | not deducted"),
         ("Deductible", "deducted | not deducted"),
@@ -1238,7 +1243,8 @@ def build_fire_cat_full():
         zones=[("EU EQ", EU_EQ_ZONES), ("EU Wind", EU_WIND_ZONES)],
         axes=FULL_AXES, splits=FULL_SPLITS,
         extra_globals=[("Rate change warning", 0.20, "0%"),
-                       ("Split view warning", 0.02, "0%")],
+                       ("Split view warning", 0.02, "0%"),
+                       ("Rate claim warning", 0.05, "0%")],
     )
 
     history_sheet(wb, "01. History Fire", section="Fire",
@@ -1278,6 +1284,23 @@ def build_fire_cat_full():
     ):
         split_sheet(wb, name, title=f"08. Book split — {section} section",
                     section=section, table=table)
+
+    # Scope names must match ⟦SECTIONS⟧ exactly — "Hurricane" here would be refused,
+    # because a rate compared against the wrong book is worse than no comparison.
+    # Two shapes on one sheet. Fire holds the rate *levels* — per mille of sum insured —
+    # so the change is worked out from them; the nat cat programme is quoted as one rate
+    # for both perils, and the change is what the underwriter was told.
+    rate_sheet(
+        wb, "09. Rate Development", title="09. Rate Development — underwriter's own",
+        blocks_spec=[
+            {"scope": "Fire", "source": "cedent", "basis": "risk-adjusted",
+             "years": ["2022", "2023", "2024", "2025", "2026"],
+             "rates": [1.180, 1.215, 1.288, 1.352, 1.406]},
+            {"scope": "Earthquake + Windstorm", "source": "broker", "basis": "nominal",
+             "years": ["2023", "2024", "2025", "2026"],
+             "changes": [0.031, 0.042, 0.055, 0.040]},
+        ],
+    )
 
     # Earthquake arrives split by cover only — the occupancy comes from 08 (§2.6 case c).
     # Windstorm arrives as one figure per zone (case a). Between them the pack shows both

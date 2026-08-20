@@ -20,6 +20,8 @@ from .constants import (
     F_INCURRED,
     F_LOSS_AMOUNT,
     F_PREMIUM,
+    F_RATE,
+    F_RATE_CHANGE,
     F_TOTAL,
     F_YEAR,
     F_ZONE,
@@ -143,6 +145,24 @@ class Identity:
 
 
 @dataclass(frozen=True)
+class Change:
+    """A column derived from the same field on the **previous** record — spec §2.7.
+
+    Every other derivation in step 2 works inside one record (S16) or between two named
+    ones (S12). This one works along the *sequence*: a rate change is what the rate did
+    since last year, so it needs the record before it and nothing else.
+
+    Where the source already supplies ``name`` this does nothing — the underwriter's own
+    figure is never overwritten by one the tool worked out.
+    """
+
+    name: str
+    field: str
+    number_format: str = FMT_PERCENT
+    key: str = F_YEAR          # what must be consecutive for the change to be annual
+
+
+@dataclass(frozen=True)
 class Split:
     """Expand what arrived into the dataset's full bucket set — spec §2.6, S20.
 
@@ -177,6 +197,11 @@ class Step2Spec:
     complete: Complete | None = None
     identity: Identity | None = None
     split: Split | None = None
+    changes: tuple[Change, ...] = field(default_factory=tuple)
+    # Numbers that are not quantities. A band bound is one (§2.4); so is a rate. Totalling
+    # them produces a figure that means nothing and would sit in the control row inviting
+    # a reader to interpret it.
+    not_summable: tuple[str, ...] = field(default_factory=tuple)
 
 
 STEP2: dict[str, Step2Spec] = {
@@ -291,6 +316,15 @@ STEP2: dict[str, Step2Spec] = {
                           parts=("Building", "Content", "BI")),
         cumulative=(Cumulative("Share of the book %", F_TOTAL),),
     ),
+    # 09 is the underwriter's, not the cedent's: the rate change a submission claims,
+    # typed in from a quote or a broker note. Either column may be the one that arrived —
+    # given the rates, the change is worked out; given the change, the rates are not.
+    "09 Rate": Step2Spec(
+        sort_by=(F_YEAR,),
+        ascending=True,
+        changes=(Change(name=F_RATE_CHANGE, field=F_RATE, key=F_YEAR),),
+        not_summable=(F_RATE, F_RATE_CHANGE),
+    ),
     "03 Large": Step2Spec(
         sort_by=(F_YEAR, "Date of Loss"),
         ascending=True,
@@ -333,4 +367,5 @@ STEP2_BY_ROLE: dict[str, Step2Spec] = {
     "06": STEP2["06 EQ Aggs"],
     "07": STEP2["06 EQ Aggs"],      # windstorm: the same dataset, a different zoning
     "08": STEP2["08 Splits"],
+    "09": STEP2["09 Rate"],
 }

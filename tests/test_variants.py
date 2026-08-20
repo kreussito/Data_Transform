@@ -77,6 +77,11 @@ def test_every_block_declares_its_section(path):
     names = {s.name for s in nomenclature.sections}
     assert blocks
     for block in blocks:
+        # 09 declares Scope instead: a rate may be quoted for several sections at once,
+        # which is a thing no single Section attribute can say.
+        if block.section is None and "Scope" in block.attributes:
+            assert block.dataset.role == "09"
+            continue
         assert block.section in names, f"{block.dataset.key} declares {block.section!r}"
 
 
@@ -676,7 +681,7 @@ FULL = ROOT / "Intake_FireCatFull_v1.xlsx"
 def test_the_complete_pack_carries_all_eight_datasets():
     nomenclature, blocks = _blocks(FULL)
     roles = {b.dataset.role for b in blocks}
-    assert roles == {"01", "02", "03", "04", "05", "06", "07", "08"}
+    assert roles == {"01", "02", "03", "04", "05", "06", "07", "08", "09"}
     assert {s.name for s in nomenclature.sections} == {"Fire", "Earthquake", "Windstorm"}
 
 
@@ -753,4 +758,4 @@ def test_the_complete_pack_runs_clean(tmp_path):
     assert report.ok, [o.detail for o in report.outcomes if o.status == "error"]
     assert report.rules_ok
     assert len(report.growth) == 2
-    assert len({o.sheet for o in report.outcomes if o.status == "processed"}) == 15
+    assert len({o.sheet for o in report.outcomes if o.status == "processed"}) == 16

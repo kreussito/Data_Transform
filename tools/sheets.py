@@ -123,7 +123,8 @@ INVENTORY = [
     ("07", "Wind Aggs", "Windstorm sums insured per cat zone", "implemented"),
     ("08", "Splits", "The cedent's book split — sums insured, one block per section",
      "implemented"),
-    ("09", "Rate Development", "Rate change history — optional", "outstanding"),
+    ("09", "Rate Development", "The rate change a submission claims — the UW's own sheet",
+     "implemented"),
     ("10", "Triangles", "Loss development triangles", "outstanding"),
     ("11", "Exchange rates", "FX rates for conversion between currencies", "outstanding"),
     ("20", "Summary", "Collected step-2 blocks — written, never read", "outstanding"),
@@ -334,3 +335,59 @@ def split_sheet(wb, name, *, title, section, table):
     return ws
 
 
+
+
+# ═════════════════════════════════════════════════ sheet 09 — spec §2.7
+# The underwriter's own sheet: the rate change a submission claims. Two shapes, because
+# an underwriter may hold the rate *levels* and not the movement between them.
+HEADERS_09 = ["Year", "Rate (optional)", "Rate change (optional)"]
+ATTRS_09 = ["Scope", "Source", "Rate change basis", "As at"]
+
+
+def rate_sheet(wb, name, *, title, blocks_spec):
+    """One block per scope. ``rows`` may carry a rate, a change, or both."""
+    ws = wb.create_sheet(name)
+    put(ws, "B1", title, title_f)
+    put(ws, "B2", "Entered by the underwriter, not the cedent — so Source says where each "
+                  "figure came from. Where only the rate level is held, step 2 works the "
+                  "change out from one year to the next.", sub_f)
+
+    entries, row = {}, 8
+    for index, spec in enumerate(blocks_spec, start=1):
+        entries[row - 5] = f"Scope_{index} = {spec['scope']}"
+        entries[row - 4] = f"Source_{index} = {spec['source']}"
+        entries[row - 3] = f"Rate change basis_{index} = {spec.get('basis', 'nominal')}"
+        entries[row - 2] = f"As at_{index} = 30.09.2025"
+        entries[row] = f"Header_{index}"
+        put(ws, f"B{row - 6}", f"— {spec['scope']} —", head_f)
+
+        declared = {"B": "Year"}
+        source = {"B": "U/W year"}
+        if spec.get("rates"):
+            declared["C"], source["C"] = "Rate", "Rate %o"
+        if spec.get("changes"):
+            col = "D" if spec.get("rates") else "C"
+            declared[col], source[col] = "Rate change", "Change vs prior"
+
+        rows = []
+        for i, year in enumerate(spec["years"]):
+            r = {"B": year}
+            if spec.get("rates"):
+                r["C"] = spec["rates"][i]
+            if spec.get("changes"):
+                r["D" if spec.get("rates") else "C"] = spec["changes"][i]
+            rows.append(r)
+
+        end = record_block(
+            ws, header_row=row, selector_col="G",
+            source_labels=source, declared=declared, rows=rows,
+            formats={c: "0.000" if declared.get(c) == "Rate" else "0.0%"
+                     for c in "CD" if c in declared},
+            note_col="H", total_cols=[],
+        )
+        entries[end + 1] = f"Info_{index} = G"
+        row = end + 8
+
+    markers(ws, entries)
+    widths(ws, {"A": 30, "B": 12, "C": 14, "D": 14, "G": 10, "H": 46})
+    return ws

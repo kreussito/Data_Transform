@@ -84,7 +84,7 @@ pip install -e ".[dev]"
 ### Proving it works before trusting it with real data
 
 ```bash
-pytest                                # 407 tests — the specification's rules
+pytest                                # 424 tests — the specification's rules
 python -m datatransform Intake_FireCatFull_v1.xlsx -o out.xlsx
 ```
 
@@ -143,7 +143,7 @@ recalculation.
 | `Intake_FireCat_v1.xlsx` | Fire + Nat Cat — the two cat sections share one sheet |
 | `Intake_FireEQWind_v1.xlsx` | Fire + Earthquake + Hurricane — a sheet per section |
 | `Intake_FireCatLosses_v1.xlsx` | Fire + Nat Cat carrying only `01`, `02` and `04`, split by EQ and Wind |
-| `Intake_FireCatFull_v1.xlsx` | **The complete treaty** — Fire + EQ + Wind, every dataset `01`–`08` |
+| `Intake_FireCatFull_v1.xlsx` | **The complete treaty** — Fire + EQ + Wind, every dataset `01`–`09` |
 | `Intake_Mexico_v1.xlsx` | Mexican cat aggregates — datasets `06` / `07`, three versions per sheet |
 | `datatransform/` | Implementation |
 | `tools/` | Generators for the reference workbooks |

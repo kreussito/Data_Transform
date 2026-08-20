@@ -14,6 +14,7 @@ from .constants import (
     IDENTITY_TOLERANCE,
     LEVEL_NAMES,
     NOT_AVAILABLE,
+    WITHIN_LIMITS as CONTROL_WITHIN,
 )
 from .model import Block, Confidence, Orientation
 from .specs import SPEC_VERSION
@@ -694,5 +695,77 @@ def write_growth(ws, table) -> list[tuple[str, str, float]]:
             "— but worth holding against the cedent's own rate change in 09 before the "
             "renewal is priced."
         )
+    _widen(ws)
+    return writer.formula_values
+
+
+def write_rate_claim(ws, claim) -> list[tuple[str, str, float]]:
+    """The claimed rate change beside the implied one — spec §10.5.
+
+    Written at the end of the rate sheet, with the question and somewhere to answer it.
+    Nothing here can fail a run: the two figures measure the book differently and drift
+    for honest reasons, so a gap is a conversation, not a defect.
+    """
+    from .extract import last_non_empty_row
+
+    writer = BlockWriter(ws, last_non_empty_row(ws) + 1 + GAP)
+    writer._put(FIRST_COL, anchor_tag(" + ".join(claim.scope), "RATECLAIM"), anchor_f)
+    writer.row += 1
+    writer._put(FIRST_COL, claim.title.upper(), title_f, fill=ctrl_fill)
+    writer.row += 1
+
+    if claim.skipped:
+        writer._line(f"NOT EVALUATED — {claim.skipped}.")
+        _widen(ws)
+        return writer.formula_values
+
+    writer._line(
+        f"The claim is what the submission says the {claim.year} renewal did"
+        + (f" [{claim.source}]" if claim.source else "")
+        + "; the implied figure is what premium and exposure say it did (§10.4). Neither "
+        "is the truth, and nothing here fails the run."
+    )
+    if claim.combined:
+        writer._line(
+            "Scope covers " + " and ".join(claim.scope) + ", so the two are combined: "
+            "premium adds, but exposure does not — a coastal risk sits in both "
+            "aggregates. Only the *growth* is used, in which a stable double count "
+            "cancels, so the sum of the aggregates is never read as a portfolio figure."
+        )
+        for i, text in enumerate(["Section", "premium growth", "exposure growth"]):
+            writer._put(FIRST_COL + i, text, head_f, fill=ctrl_fill)
+        writer.row += 1
+        for section, premium, exposure in claim.parts:
+            writer._put(FIRST_COL, section, body_f)
+            writer._put(FIRST_COL + 1, premium, body_f, FMT_PERCENT)
+            writer._put(FIRST_COL + 2, exposure, body_f, FMT_PERCENT)
+            writer.row += 1
+        writer.row += 1
+
+    for label, value in (("Premium growth", claim.premium_growth),
+                         ("Exposure growth", claim.exposure_growth),
+                         ("Implied rate change", claim.implied),
+                         (f"Claimed rate change, {claim.year}", claim.claimed)):
+        writer._put(FIRST_COL, label, ctrl_f if "rate change" in label else note_f)
+        if value is None:
+            writer._put(FIRST_COL + 2, NOT_AVAILABLE, note_f)
+        else:
+            writer._put(FIRST_COL + 2, value, ctrl_f, FMT_PERCENT)
+        writer.row += 1
+
+    writer._put(FIRST_COL, "Gap (percentage points)", ctrl_f)
+    if claim.gap is not None:
+        writer._put(FIRST_COL + 2, claim.gap, ctrl_f, FMT_PERCENT,
+                    fill=None if claim.status == CONTROL_WITHIN else ctrl_fill)
+    writer.row += 1
+    writer._put(FIRST_COL, "Status", ctrl_f)
+    writer._put(FIRST_COL + 2, claim.status, ctrl_f,
+                fill=None if claim.status == CONTROL_WITHIN else ctrl_fill)
+    writer.row += 2
+
+    writer._line(claim.question)
+    writer._put(FIRST_COL, "Answer:", head_f)
+    writer._put(FIRST_COL + 1, "", body_f, fill=input_fill)
+    writer.row += 2
     _widen(ws)
     return writer.formula_values
