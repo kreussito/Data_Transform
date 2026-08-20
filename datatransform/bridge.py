@@ -38,29 +38,31 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .constants import (
+    IPF_ROUNDS,
+    IPF_TOLERANCE,
+    LEVEL_COVER,
+    LEVEL_NAMES,
+    LEVEL_OCCUPANCY,
+    LEVEL_SEGMENT,
+    LEVEL_TOTAL,
+    PERCENT_SCALE,
+    SHARE_CLOSURE,
+    SPLIT_VIEW_DEFAULT,
+    SPLIT_VIEW_WARNING,
+    F_CATEGORY,
+    F_TOTAL,
+    ROLE_SPLITS,
+    read_share,
+)
 from .model import ExtractionError
 from .nomenclature import norm
 
-TOTAL = "Total"
+TOTAL = F_TOTAL
 NO_COVER = ""          # 08 carrying no cover breakdown: one implicit cover category
 
-LEVEL_NAMES = {
-    "reported": "reported grid",
-    "occupancy": "occupancy split",
-    "cover": "cover split",
-    "both": "two reported margins",
-    "segment": "Projects/Renewables segmentation",
-    "total": "single zone total",
-}
-
-# The gap above which two views of the book are called a disagreement. Declared in
-# ⟦GLOBAL⟧ beside the other two thresholds, because how far apart is "apart" is an
-# underwriting judgement and not a mechanic — spec §2.6.
-VIEW_ATTRIBUTE = "Split view warning"
-DEFAULT_VIEW_THRESHOLD = 0.02
-
-IPF_ROUNDS = 60
-IPF_TOLERANCE = 1e-9
+VIEW_ATTRIBUTE = SPLIT_VIEW_WARNING
+DEFAULT_VIEW_THRESHOLD = SPLIT_VIEW_DEFAULT
 
 
 @dataclass
@@ -158,24 +160,22 @@ class Bridge:
     # ── the bridge itself ────────────────────────────────────────────────────
     def distribute(self, kind: str, label: str) -> dict[tuple[str, str], float]:
         """M(a → ·) for one reported category. The four rows of the table above."""
-        if kind == "occupancy":
+        if kind == LEVEL_OCCUPANCY:
             return {(label, c): s for c, s in self.cover_given_occupancy(label).items()}
-        if kind == "cover":
+        if kind == LEVEL_COVER:
             return {(o, label): s for o, s in self.occupancy_given_cover(label).items()}
-        if kind == "segment":
+        if kind == LEVEL_SEGMENT:
             occ = self.occupancy_given_segment(label)
             cov = self.cover_given_segment(label)
             return {(o, c): a * b for o, a in occ.items() for c, b in cov.items()}
-        if kind == "total":
+        if kind == LEVEL_TOTAL:
             return self.joint()
         raise ValueError(f"unknown reported level {kind!r}")
 
 
 def view_threshold(nomenclature) -> float:
     """⟦GLOBAL⟧ ``Split view warning`` — the underwriter's number, not the tool's."""
-    from .growth import _read_share
-
-    return _read_share(nomenclature, VIEW_ATTRIBUTE, DEFAULT_VIEW_THRESHOLD)
+    return read_share(nomenclature, VIEW_ATTRIBUTE, DEFAULT_VIEW_THRESHOLD)
 
 
 def _normalise(weights: dict[str, float], what: str, bridge: Bridge) -> dict[str, float]:
@@ -189,7 +189,7 @@ def _normalise(weights: dict[str, float], what: str, bridge: Bridge) -> dict[str
 
 
 # ────────────────────────────────────────────────── building it from sheet 08
-CATEGORY_FIELD = "Category"
+CATEGORY_FIELD = F_CATEGORY
 
 
 def build_bridge(nomenclature, blocks, section: str, occupancy, covers) -> Bridge | None:
@@ -197,7 +197,7 @@ def build_bridge(nomenclature, blocks, section: str, occupancy, covers) -> Bridg
     from .crosschecks import find_block
 
     pool = list(blocks.values()) if isinstance(blocks, dict) else list(blocks)
-    table = find_block(pool, "08", section)
+    table = find_block(pool, ROLE_SPLITS, section)
     if table is None:
         return None
 
@@ -264,7 +264,8 @@ def _row_weights(table, cover_fields) -> dict[str, float] | None:
     weights = {}
     for record in table.records:
         row = sum(_number(record.values.get(c)) for c in cover_fields)
-        if not (abs(row - 1.0) < 0.005 or abs(row - 100.0) < 0.5):
+        if not (abs(row - 1.0) < SHARE_CLOSURE
+                or abs(row - PERCENT_SCALE) < PERCENT_SCALE * SHARE_CLOSURE):
             return None                            # amounts, or a joint — normalise whole
         weights[norm(record.values.get(CATEGORY_FIELD))] = \
             _number(record.values.get(TOTAL)) / row

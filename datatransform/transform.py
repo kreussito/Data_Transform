@@ -6,6 +6,17 @@ import re
 from dataclasses import dataclass, field
 
 from .bridge import LevelFinding, build_bridge, fit_margins, view_threshold
+from .constants import (
+    FINDING_EXAMPLES,
+    IDENTITY_TOLERANCE,
+    LEVEL_BOTH,
+    LEVEL_COVER,
+    LEVEL_OCCUPANCY,
+    LEVEL_REPORTED,
+    LEVEL_SEGMENT,
+    LEVEL_TOTAL,
+    NOTE_EXAMPLES,
+)
 from .model import Block, Confidence, ExtractionError, Hypothesis, Record
 from .nomenclature import norm
 from .specs import AggregateSpec, Step2Spec
@@ -212,28 +223,28 @@ def _reported_level(block: Block, occupancy, covers, segments, total: str):
     seg = [s for s in segments if s in have]
 
     if occ and cov:
-        return "both", (tuple(occ), tuple(cov))
+        return LEVEL_BOTH, (tuple(occ), tuple(cov))
     if occ:
-        return "occupancy", tuple(occ)
+        return LEVEL_OCCUPANCY, tuple(occ)
     if cov:
-        return "cover", tuple(cov)
+        return LEVEL_COVER, tuple(cov)
     if seg:
-        return "segment", tuple(seg)
+        return LEVEL_SEGMENT, tuple(seg)
     if total in have:
-        return "total", (total,)
+        return LEVEL_TOTAL, (total,)
     return "", ()
 
 
 def _unused_levels(block: Block, targets, total: str, kind: str, labels) -> list[str]:
     """Reported columns the chosen level does not consume."""
-    used = set(labels[0] + labels[1]) if kind == "both" else set(labels)
+    used = set(labels[0] + labels[1]) if kind == LEVEL_BOTH else set(labels)
     return [f for f in block.numeric_fields
             if f not in used and f != total and f not in set(targets)]
 
 
 def _level_of(field_name: str, occupancy, covers, segments) -> str:
-    for kind, members in (("occupancy", occupancy), ("cover", covers),
-                          ("segment", segments)):
+    for kind, members in ((LEVEL_OCCUPANCY, occupancy), (LEVEL_COVER, covers),
+                          (LEVEL_SEGMENT, segments)):
         if field_name in members:
             return kind
     return ""
@@ -268,12 +279,12 @@ def _reconcile_levels(block: Block, records, bridge, occupancy, covers, segments
                            labels=tuple(occupancy),
                            threshold=view_threshold(nomenclature))
 
-    used = labels[0] + labels[1] if kind == "both" else tuple(labels)
+    used = labels[0] + labels[1] if kind == LEVEL_BOTH else tuple(labels)
     mine = {o: 0.0 for o in occupancy}
     theirs = {o: 0.0 for o in occupancy}
 
     for record in records:
-        if kind == "reported":
+        if kind == LEVEL_REPORTED:
             # The grid itself is the primary view; collapse it onto the occupancy axis.
             for name in targets:
                 head = next((o for o in occupancy
@@ -282,7 +293,7 @@ def _reconcile_levels(block: Block, records, bridge, occupancy, covers, segments
                     mine[head] += _amount(record, name)
         else:
             for label in used:
-                level = _level_of(label, occupancy, covers, segments) or "total"
+                level = _level_of(label, occupancy, covers, segments) or LEVEL_TOTAL
                 for (o, _), share in bridge.distribute(level, label).items():
                     mine[o] += _amount(record, label) * share
         for label in unused:
@@ -320,13 +331,13 @@ def _split(block: Block, spec: Step2Spec, records, nomenclature, blocks=None):
         # The finished grid arrived. Any *other* level column describes the same book a
         # second way, and choosing between them silently is not the tool's to do.
         finding = None
-        if _unused_levels(block, targets, rule.total, "reported", targets):
+        if _unused_levels(block, targets, rule.total, LEVEL_REPORTED, targets):
             bridge = build_bridge(nomenclature, blocks or [], block.section, occupancy,
                                   target_covers or nomenclature.cover_categories())
             finding = _reconcile_levels(
                 block, records, bridge, occupancy,
                 bridge.covers if bridge else (), segments, targets, rule.total,
-                "reported", targets, nomenclature,
+                LEVEL_REPORTED, targets, nomenclature,
             ) if bridge else None
         return records, (), [], False, (), finding
 
@@ -357,12 +368,12 @@ def _split(block: Block, spec: Step2Spec, records, nomenclature, blocks=None):
                                 segments, targets, rule.total, kind, labels,
                                 nomenclature)
     created = tuple(t for t in targets if t not in block.fields)
-    return out, created, notes, kind == "total", created, finding
+    return out, created, notes, kind == LEVEL_TOTAL, created, finding
 
 
 def _expand(record, kind: str, labels, bridge, occupancy) -> dict:
     """One record's amounts, spread over the section's occupancy × cover grid."""
-    if kind == "both":
+    if kind == LEVEL_BOTH:
         occ_labels, cover_labels = labels
         return fit_margins(
             bridge.joint(), occupancy, bridge.covers,
@@ -377,7 +388,7 @@ def _expand(record, kind: str, labels, bridge, occupancy) -> dict:
     grid: dict = {}
     for label in labels:
         amount = _amount(record, label)
-        source = "total" if kind == "total" else kind
+        source = LEVEL_TOTAL if kind == LEVEL_TOTAL else kind
         for cell, share in bridge.distribute(source, label).items():
             grid[cell] = grid.get(cell, 0.0) + amount * share
     return grid
@@ -405,23 +416,23 @@ def _project(targets, axes, occupancy, covers) -> dict:
 
 def _split_notes(kind, labels, bridge, targets, axes) -> list[str]:
     told = {
-        "both": "both margins reported per zone, fitted to the grid from {src} so that "
+        LEVEL_BOTH: "both margins reported per zone, fitted to the grid from {src} so that "
                 "neither margin moves",
-        "occupancy": "occupancy reported per zone; the cover mix of each comes from {src}",
-        "cover": "cover reported per zone; the occupancy mix of each comes from {src} — "
+        LEVEL_OCCUPANCY: "occupancy reported per zone; the cover mix of each comes from {src}",
+        LEVEL_COVER: "cover reported per zone; the occupancy mix of each comes from {src} — "
                  "which is why residential BI stays near nil rather than taking a flat share",
-        "segment": "reported as {shown}, translated onto the target cells through {src} "
+        LEVEL_SEGMENT: "reported as {shown}, translated onto the target cells through {src} "
                    "and the declared occupancy convention",
-        "total": "one figure per zone, spread over the target cells by the joint "
+        LEVEL_TOTAL: "one figure per zone, spread over the target cells by the joint "
                  "distribution of {src}",
     }[kind]
-    shown = ", ".join(labels if kind != "both" else labels[0] + labels[1])
+    shown = ", ".join(labels if kind != LEVEL_BOTH else labels[0] + labels[1])
     notes = [
         f"{len(targets)} target cell(s) built: "
         + told.format(src=bridge.source, shown=shown)
         + " (value-adding — an assumption about the zone, not about the book)"
     ]
-    if kind == "segment" and bridge.conventions:
+    if kind == LEVEL_SEGMENT and bridge.conventions:
         notes.append(
             "occupancy of " + " and ".join(bridge.conventions)
             + " is a declared convention in sheet 00 ⟦SPLITS⟧, not a reading — sheet 08 "
@@ -570,11 +581,11 @@ def _identity(block: Block, spec: Step2Spec, records, nomenclature=None,
             total = record.values.get(rule.total)
             summed = sum(record.values[p] for p in parts
                          if isinstance(record.values.get(p), (int, float)))
-            if isinstance(total, (int, float)) and abs(total - summed) > 0.5:
+            if isinstance(total, (int, float)) and abs(total - summed) > IDENTITY_TOLERANCE:
                 off.append(f"{record.values.get(rule.total, '')}"
                            f"{record.source_ref}: {total:,.0f} vs {summed:,.0f}")
         note = (f"{rule.total} checked against {len(parts)} part(s): "
-                + ("all agree" if not off else "DISAGREES — " + "; ".join(off[:5])))
+                + ("all agree" if not off else "DISAGREES — " + "; ".join(off[:FINDING_EXAMPLES])))
         return records, (), note
 
     out = []
@@ -773,12 +784,12 @@ def apply_step2(block: Block, spec: Step2Spec, nomenclature=None, blocks=None) -
             f"{'' if r.values.get(spec.bounds.lower) is None else format(r.values[spec.bounds.lower], ',.0f')}"
             f" … "
             f"{'open' if r.values.get(spec.bounds.upper) is None else format(r.values[spec.bounds.upper], ',.0f')}"
-            for r in records[:3]
+            for r in records[:NOTE_EXAMPLES]
         )
         notes.append(
             f"{' and '.join(bound_fields)} read off {spec.bounds.label} — the source "
             f"declares no such column (value-adding): {shown}"
-            + (" …" if len(records) > 3 else "")
+            + (" …" if len(records) > NOTE_EXAMPLES else "")
         )
 
     available = set(block.fields) | set(derived_fields)

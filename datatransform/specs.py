@@ -10,6 +10,22 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from .constants import (
+    A_OCCURRENCE_FROM,
+    FMT_AMOUNT,
+    FMT_PERCENT,
+    F_CATEGORY,
+    F_EPI,
+    F_EXPOSURE,
+    F_INCURRED,
+    F_LOSS_AMOUNT,
+    F_PREMIUM,
+    F_TOTAL,
+    F_YEAR,
+    F_ZONE,
+    ROLE_HISTORY,
+)
+
 SPEC_VERSION = "1"
 
 # Field datatypes are declared in ⟦TYPES⟧ of sheet 00, not here: a field name carries
@@ -22,7 +38,7 @@ class Calculation:
 
     name: str
     expression: str
-    number_format: str = "0.0%"
+    number_format: str = FMT_PERCENT
     guard_zero: str | None = None      # field that must not be zero
 
 
@@ -38,7 +54,7 @@ class DerivedFigure:
     denominator: str          # record pattern, e.g. "{N} est"
     field: str
     kind: str = "ratio_minus_1"
-    number_format: str = "0.0%"
+    number_format: str = FMT_PERCENT
     note: str = ""
 
 
@@ -88,7 +104,7 @@ class Cumulative:
 
     name: str
     field: str
-    number_format: str = "0.0%"
+    number_format: str = FMT_PERCENT
 
 
 @dataclass(frozen=True)
@@ -138,7 +154,7 @@ class Split:
     ``total`` names the field to start from when nothing but a grand figure arrived.
     """
 
-    total: str = "Total"
+    total: str = F_TOTAL
 
 
 @dataclass(frozen=True)
@@ -165,26 +181,26 @@ class Step2Spec:
 
 STEP2: dict[str, Step2Spec] = {
     "01 History": Step2Spec(
-        sort_by=("Year",),
+        sort_by=(F_YEAR,),
         ascending=True,
         calculations=(
             Calculation(
                 name="Loss Ratio %",
-                expression="{Incurred Losses}/{Premium}",
-                number_format="0.0%",
-                guard_zero="Premium",
+                expression="{" + F_INCURRED + "}/{" + F_PREMIUM + "}",
+                number_format=FMT_PERCENT,
+                guard_zero=F_PREMIUM,
             ),
         ),
     ),
     "02 EPI": Step2Spec(
-        sort_by=("Year",),
+        sort_by=(F_YEAR,),
         ascending=True,
         figures=(
             DerivedFigure(
                 name="Estimation error",
                 numerator="{N} re-est",
                 denominator="{N} est",
-                field="EPI",
+                field=F_EPI,
                 note="how far the cedent's own projection for N has moved; "
                      "the measure of how much to trust N+1",
             ),
@@ -192,27 +208,27 @@ STEP2: dict[str, Step2Spec] = {
                 name="Implied growth",
                 numerator="{N+1}",
                 denominator="{N} re-est",
-                field="EPI",
+                field=F_EPI,
                 note="cross-check against rate development and exposure growth",
             ),
         ),
     ),
     "04 Cat": Step2Spec(
-        sort_by=("Year", "Event Date"),
+        sort_by=(F_YEAR, "Event Date"),
         ascending=True,
         aggregates=(
             AggregateSpec(
                 title="Annual sum of cat losses",
-                group_by="Year",
-                measures=("Loss amount",),
-                zero_fill_from="01",
+                group_by=F_YEAR,
+                measures=(F_LOSS_AMOUNT,),
+                zero_fill_from=ROLE_HISTORY,
                 note="on the treaty's year basis — this is the table that ties to 01",
             ),
             AggregateSpec(
                 title="By occurrence year",
                 group_by="year(Event Date)",
-                measures=("Loss amount",),
-                group_by_attribute="Occurrence year from",
+                measures=(F_LOSS_AMOUNT,),
+                group_by_attribute=A_OCCURRENCE_FROM,
                 note="informational: an event may fall in several underwriting years, "
                      "so this does not tie to 01 unless the treaty is on an "
                      "occurrence-year basis",
@@ -220,7 +236,7 @@ STEP2: dict[str, Step2Spec] = {
             AggregateSpec(
                 title="By event",
                 group_by="Event ID",
-                measures=("Loss amount",),
+                measures=(F_LOSS_AMOUNT,),
                 note="what the event actually cost — the figure a cat layer is priced "
                      "against, and the one no annual row shows",
             ),
@@ -237,7 +253,7 @@ STEP2: dict[str, Step2Spec] = {
             Calculation(
                 name="Average exposure per risk",
                 expression="{Exposure}/{Number of Risks}",
-                number_format="#,##0",
+                number_format=FMT_AMOUNT,
                 guard_zero="Number of Risks",
             ),
             Calculation(
@@ -249,41 +265,41 @@ STEP2: dict[str, Step2Spec] = {
         ),
         cumulative=(
             Cumulative("Cumulative risks %", "Number of Risks"),
-            Cumulative("Cumulative exposure %", "Exposure"),
+            Cumulative("Cumulative exposure %", F_EXPOSURE),
             Cumulative("Cumulative premium %", "Premium"),
         ),
     ),
     # 06 and 07 are the same dataset zoned differently — one profile of the portfolio
     # by geography, because cat losses correlate spatially. Spec §2.5.
     "06 EQ Aggs": Step2Spec(
-        sort_by=("Zone",),
+        sort_by=(F_ZONE,),
         ascending=True,
-        split=Split(total="Total"),
+        split=Split(total=F_TOTAL),
         complete=Complete(key="Zone", catalogue_attribute="Zone scheme"),
         # The parts are the buckets from ⟦AXES⟧: nine for earthquake, three for wind.
-        identity=Identity(total="Total"),
-        cumulative=(Cumulative("Cumulative exposure %", "Total"),),
+        identity=Identity(total=F_TOTAL),
+        cumulative=(Cumulative("Cumulative exposure %", F_TOTAL),),
     ),
     # 08 is the cedent's own split table — the book, not the zones. It is a dataset in
     # its own right (it gets both steps like any other) *and* the source of the ratios
     # 06/07 bridge with, which is why it carries the same identity check: a Total that
     # disagrees with its parts would quietly distort every zone downstream.
     "08 Splits": Step2Spec(
-        sort_by=("Category",),
+        sort_by=(F_CATEGORY,),
         ascending=True,
-        identity=Identity(total="Total",
+        identity=Identity(total=F_TOTAL,
                           parts=("Building", "Content", "BI")),
-        cumulative=(Cumulative("Share of the book %", "Total"),),
+        cumulative=(Cumulative("Share of the book %", F_TOTAL),),
     ),
     "03 Large": Step2Spec(
-        sort_by=("Year", "Date of Loss"),
+        sort_by=(F_YEAR, "Date of Loss"),
         ascending=True,
         aggregates=(
             AggregateSpec(
                 title="Annual sum of large losses",
-                group_by="Year",
-                measures=("Loss amount",),
-                zero_fill_from="01",
+                group_by=F_YEAR,
+                measures=(F_LOSS_AMOUNT,),
+                zero_fill_from=ROLE_HISTORY,
             ),
         ),
     ),

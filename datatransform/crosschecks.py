@@ -30,6 +30,16 @@ from .model import (
     Section,
     parse_reference,
 )
+from .constants import (
+    FAILED,
+    NOT_APPLICABLE,
+    PASSED,
+    SKIPPED,
+    A_CURRENCY,
+    A_LOSS_BASIS,
+    A_PREMIUM_BASIS,
+    A_SHARE_BASIS,
+)
 from .nomenclature import Nomenclature, norm
 
 LEADING_NUMBER = re.compile(r"^\s*(\d+)\s*(.*)$")
@@ -46,7 +56,7 @@ RELATIONS = {
 }
 
 # Attributes that must agree before two figures may be compared.
-PRECONDITIONS = ("Premium basis", "Loss basis", "Share basis", "Currency")
+PRECONDITIONS = (A_PREMIUM_BASIS, A_LOSS_BASIS, A_SHARE_BASIS, A_CURRENCY)
 
 SCALES = {"1": 1.0, "1,000": 1_000.0, "1000": 1_000.0,
           "1,000,000": 1_000_000.0, "1000000": 1_000_000.0}
@@ -271,7 +281,7 @@ def evaluate_one(rule: Rule, left_ref: Reference, right_ref: Reference,
               if b is None]
     if absent:
         where = f" for section {section}" if section else ""
-        return RuleResult(rule, "not applicable",
+        return RuleResult(rule, NOT_APPLICABLE,
                           f"{', '.join(absent)} is not in this pack{where}",
                           year=year, section=section)
 
@@ -280,36 +290,36 @@ def evaluate_one(rule: Rule, left_ref: Reference, right_ref: Reference,
     for side, value, detail in (("left", left_value, left_detail),
                                 ("right", right_value, right_detail)):
         if value is None:
-            return RuleResult(rule, "skipped", f"{side}: {detail}",
+            return RuleResult(rule, SKIPPED, f"{side}: {detail}",
                               year=year, section=section)
 
     # Attribute comparison — a string equality, no scale or tolerance involved.
     if left_ref.is_attribute or right_ref.is_attribute:
         if not (left_ref.is_attribute and right_ref.is_attribute):
-            return RuleResult(rule, "skipped",
+            return RuleResult(rule, SKIPPED,
                               "one side names an attribute and the other a figure",
                               year=year, section=section)
         passed = str(left_value).casefold() == str(right_value).casefold()
-        return RuleResult(rule, "passed" if passed else "failed",
+        return RuleResult(rule, PASSED if passed else FAILED,
                           f"{left_detail} {rule.relation} {right_detail}",
                           year=year, section=section)
 
     reason = _incompatible(left_block, right_block)
     if reason:
-        return RuleResult(rule, "skipped",
+        return RuleResult(rule, SKIPPED,
                           f"not comparable: {reason} — normalising it is a judgment, "
                           "so the rule is not evaluated", year=year, section=section)
 
     right_in_left_scale = right_value * scale_factor(right_block) / scale_factor(left_block)
     test = RELATIONS.get(rule.relation)
     if test is None:
-        return RuleResult(rule, "skipped", f"unknown relation {rule.relation!r}",
+        return RuleResult(rule, SKIPPED, f"unknown relation {rule.relation!r}",
                           year=year, section=section)
 
     passed = test(float(left_value), float(right_in_left_scale), rule.tolerance)
     detail = (f"{left_value:,.0f} {rule.relation} {right_in_left_scale:,.0f} "
               f"(tolerance {rule.tolerance:,.0f})")
-    return RuleResult(rule, "passed" if passed else "failed", detail,
+    return RuleResult(rule, PASSED if passed else FAILED, detail,
                       float(left_value), float(right_in_left_scale),
                       year=year, section=section)
 
@@ -319,7 +329,7 @@ def _evaluate_in_section(rule: Rule, left_ref: Reference, right_ref: Reference,
     wildcard = is_wildcard(left_ref.record or "") or is_wildcard(right_ref.record or "")
     if not wildcard:
         if n is None and any("{N" in (r.record or "") for r in (left_ref, right_ref)):
-            return [RuleResult(rule, "skipped",
+            return [RuleResult(rule, SKIPPED,
                                "⟦GLOBAL⟧ declares no 'Actual year', so {N} cannot resolve",
                                section=section)]
         return [evaluate_one(rule, left_ref, right_ref, blocks, n, section=section)]
@@ -329,7 +339,7 @@ def _evaluate_in_section(rule: Rule, left_ref: Reference, right_ref: Reference,
     block = find_block(blocks, source.dataset_key, section)
     if block is None:
         where = f" for section {section}" if section else ""
-        return [RuleResult(rule, "not applicable",
+        return [RuleResult(rule, NOT_APPLICABLE,
                            f"{source.dataset_key} is not in this pack{where}",
                            section=section)]
 
@@ -347,11 +357,11 @@ def evaluate(rule: Rule, blocks, n: int | None, nomenclature=None) -> list[RuleR
     try:
         left_ref, right_ref = rule.left_ref, rule.right_ref
     except Exception as exc:                                     # noqa: BLE001
-        return [RuleResult(rule, "skipped", str(exc))]
+        return [RuleResult(rule, SKIPPED, str(exc))]
 
     sections = applicable_sections(rule, nomenclature) if nomenclature else [None]
     if not sections:
-        return [RuleResult(rule, "not applicable",
+        return [RuleResult(rule, NOT_APPLICABLE,
                            f"scope {rule.scope!r} matches no section in this pack")]
 
     out = []
@@ -397,7 +407,7 @@ def hypotheses_from(results, block: Block) -> list[Hypothesis]:
     """
     out = []
     for result in results_for(results, block):
-        if result.status in ("passed", "not applicable"):
+        if result.status in (PASSED, NOT_APPLICABLE):
             continue
         out.append(
             Hypothesis(
@@ -406,7 +416,7 @@ def hypotheses_from(results, block: Block) -> list[Hypothesis]:
                 attribute=f"Crosscheck {result.label}",
                 value=result.rule.note or f"{result.rule.left} {result.rule.relation} "
                                           f"{result.rule.right}",
-                confidence=Confidence.OPEN if result.status == "failed"
+                confidence=Confidence.OPEN if result.status == FAILED
                 else Confidence.ASSUMED,
                 source="tool",
                 note=f"{result.status}: {result.detail}",

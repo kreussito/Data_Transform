@@ -9,12 +9,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .constants import M_HEADER, STRUCTURAL_MARKERS
 from .nomenclature import norm
 
 # ``Section`` is deliberately not here: it is an attribute of the data (which part of
 # the treaty these figures describe), and belongs in the attribute list a reviewer reads.
 # ``Dataset`` is structure — which dataset the block *is* — so it stays out of that list.
-STRUCTURAL = ("Header", "Info", "Transpose", "Dataset")
+STRUCTURAL = STRUCTURAL_MARKERS
 
 # Header_1 / Info_2 = L / Transpose_1 / Dataset_2 = 04 Cat / H_Year basis_1 = UW
 MARKER = re.compile(
@@ -74,7 +75,7 @@ def read_markers(ws, last_row: int | None = None) -> list[Marker]:
 
 def block_indices(markers) -> list[int]:
     """Blocks are declared by ``Header_i`` and nothing else — spec §4 M7."""
-    return sorted({m.index for m in markers if m.name == "Header" and m.index is not None})
+    return sorted({m.index for m in markers if m.name == M_HEADER and m.index is not None})
 
 
 def structural(markers, name: str, index: int) -> Marker | None:

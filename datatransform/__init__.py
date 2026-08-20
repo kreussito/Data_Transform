@@ -10,4 +10,6 @@ __all__ = [
     "Block", "Confidence", "Dataset", "ExtractionError", "Orientation",
     "Record", "RunReport", "run",
 ]
-__version__ = "0.1.0"
+from .constants import VERSION
+
+__version__ = VERSION

@@ -9,6 +9,13 @@ from openpyxl.utils import get_column_letter as col_letter
 
 from .coerce import coerce
 from .markers import attributes_for, block_indices, structural
+from .constants import (
+    A_OCCURRENCE_FROM,
+    M_DATASET,
+    M_HEADER,
+    M_INFO,
+    M_TRANSPOSE,
+)
 from .model import (
     Attribute,
     Block,
@@ -143,7 +150,7 @@ def _occurrence_date_field(block: Block) -> str | None:
     dates = [h for h in block.fields if block.field_types.get(h) is FieldType.DATE]
     if not dates:
         return None
-    declared = block.attributes.get("Occurrence year from")
+    declared = block.attributes.get(A_OCCURRENCE_FROM)
     if declared is not None:
         named = norm(declared.value)
         if named not in dates:
@@ -294,21 +301,21 @@ def _block_boundary(markers, index: int, orientation, limit_row: int) -> int:
     """
     if orientation is Orientation.TRANSPOSED:
         return limit_row
-    mine = next((m.row for m in markers if m.name == "Header" and m.index == index), None)
+    mine = next((m.row for m in markers if m.name == M_HEADER and m.index == index), None)
     if mine is None:
         return limit_row
 
     my_selector = _selector_of(markers, index)
     later = [
         m.row for m in markers
-        if m.name == "Header" and m.index != index and m.row > mine
+        if m.name == M_HEADER and m.index != index and m.row > mine
         and _selector_of(markers, m.index) == my_selector
     ]
     return min(later) - 1 if later else limit_row
 
 
 def _selector_of(markers, index: int) -> str | None:
-    marker = structural(markers, "Info", index)
+    marker = structural(markers, M_INFO, index)
     return norm(marker.value).casefold() if marker and marker.value else None
 
 
@@ -319,14 +326,14 @@ def _header_rows(markers) -> set[int]:
     and would otherwise swallow block 2's extraction row, whose labels sit in the same
     columns block 1 reads as measures.
     """
-    return {m.row for m in markers if m.name == "Header"}
+    return {m.row for m in markers if m.name == M_HEADER}
 
 
 def extract_block(values_ws, formulas_ws, dataset: Dataset, markers, index: int,
                   nomenclature: Nomenclature) -> Block:
-    header = structural(markers, "Header", index)
-    info = structural(markers, "Info", index)
-    transposed = structural(markers, "Transpose", index) is not None
+    header = structural(markers, M_HEADER, index)
+    info = structural(markers, M_INFO, index)
+    transposed = structural(markers, M_TRANSPOSE, index) is not None
     where = f"{values_ws.title} block {index}"
 
     if info is None or not info.value:
@@ -522,7 +529,7 @@ def _dataset_for_block(values_ws, nomenclature, markers, index, default):
     cat events in one list needs both datasets on one sheet, so a block may name its
     own with ``Dataset_i = 04 Cat``.
     """
-    declared = structural(markers, "Dataset", index)
+    declared = structural(markers, M_DATASET, index)
     if declared is None or not declared.value:
         if default is None:
             raise ExtractionError(
@@ -546,7 +553,7 @@ def extract_sheet(values_ws, formulas_ws, nomenclature: Nomenclature, markers) -
     default = nomenclature.dataset_for(values_ws.title)
     indices = block_indices(markers)
     if default is None and not any(
-        structural(markers, "Dataset", i) is not None for i in indices
+        structural(markers, M_DATASET, i) is not None for i in indices
     ):
         return []
 

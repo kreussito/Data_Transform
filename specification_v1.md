@@ -1695,6 +1695,29 @@ that" in 2028.
 
 ---
 
+### 11.1 Where a value lives
+
+Three homes, and the boundary between them is the same one §3 draws:
+
+| | Where | Example |
+|---|---|---|
+| **Declared** — a fact a human knows and a machine cannot infer | sheet `00` | the zone catalogue, the split ratios, the three warning thresholds |
+| **Mechanics** — how a dataset is transformed | `specs.py` | sort order, cumulative columns, the identity of `Total` |
+| **Vocabulary** — the words two modules use to agree | `constants.py` | the reporting levels, the four rule outcomes, the marker keywords |
+
+The third is not configuration and deliberately has no file of its own outside the code.
+`"occupancy"` is not a setting: renaming it would not change what the tool does, it would
+break it. What made collecting them worthwhile is narrower — several were written out
+*independently in two modules*, which was correct on the day and one careless edit away
+from not being. Modules keep readable local aliases; the value behind them is defined
+once, and `tests/test_constants.py` fails if a module writes one out again.
+
+A second declared surface beside sheet `00` was considered and rejected. It would raise a
+question with no good answer — which one wins — and every genuinely tunable number is
+already in `⟦GLOBAL⟧`, where the underwriter can see it beside the figures it governs.
+
+---
+
 ## 12 · Technical constraints
 
 | Rule | |

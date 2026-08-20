@@ -37,24 +37,39 @@ from .crosschecks import (
     years_in,
 )
 from .model import Block
+from .constants import (
+    LOSS_ROLES,
+    LOSS_SHARE_DEFAULT,
+    LOSS_SHARE_WARNING,
+    LOSS_TOLERANCE,
+    A_CURRENCY,
+    A_LOSS_BASIS,
+    A_SHARE_BASIS,
+    F_INCURRED,
+    F_LOSS_AMOUNT,
+    ROLE_CAT,
+    ROLE_HISTORY,
+    ROLE_LARGE,
+    read_share,
+)
 from .nomenclature import norm
 
-BASIS_ROLE = "01"
-BASIS_FIELD = "Incurred Losses"
-LOSS_ROLES = ("03", "04")
-LOSS_FIELD = "Loss amount"
+BASIS_ROLE = ROLE_HISTORY
+BASIS_FIELD = F_INCURRED
 
-ROLE_LABEL = {"03": "Large losses (03)", "04": "Cat losses (04)"}
+LOSS_FIELD = F_LOSS_AMOUNT
+
+ROLE_LABEL = {ROLE_LARGE: "Large losses (03)", ROLE_CAT: "Cat losses (04)"}
 
 # The same tolerance R-01 and R-02 declare in sheet 00: figures rounded to thousands
 # never satisfy exact equality, and a check that always fires gets ignored.
-TOLERANCE = 1.0
+TOLERANCE = LOSS_TOLERANCE
 
-DEFAULT_THRESHOLD = 0.20
-THRESHOLD_ATTRIBUTE = "Loss share warning"
+DEFAULT_THRESHOLD = LOSS_SHARE_DEFAULT
+THRESHOLD_ATTRIBUTE = LOSS_SHARE_WARNING
 
 # Losses are compared with losses, so the premium basis is not among these.
-PRECONDITIONS = ("Loss basis", "Share basis", "Currency")
+PRECONDITIONS = (A_LOSS_BASIS, A_SHARE_BASIS, A_CURRENCY)
 
 # Deliberately not "OK": step 1 and step 2 already write an OK/MISMATCH control check,
 # and one word must not mean two things on the same sheet.
@@ -128,9 +143,6 @@ class LossShareTable:
         return OK
 
 
-PERCENT = re.compile(r"^\s*([0-9.,]+)\s*%\s*$")
-
-
 def threshold_of(nomenclature) -> float:
     """The warning threshold, declared in ⟦GLOBAL⟧ — spec §10.3.
 
@@ -138,19 +150,7 @@ def threshold_of(nomenclature) -> float:
     as a percentage. An undeclared threshold falls back to 20%, which is stated in the
     written table so the reader knows it was not their choice.
     """
-    raw = (getattr(nomenclature, "globals", None) or {}).get(THRESHOLD_ATTRIBUTE)
-    if raw is None or norm(raw) == "":
-        return DEFAULT_THRESHOLD
-
-    text = norm(raw)
-    percent = PERCENT.match(text)
-    try:
-        value = float((percent.group(1) if percent else text).replace(",", ""))
-    except ValueError:
-        return DEFAULT_THRESHOLD
-    if percent or value > 1:
-        value /= 100.0
-    return value
+    return read_share(nomenclature, THRESHOLD_ATTRIBUTE, DEFAULT_THRESHOLD)
 
 
 def _contributors(blocks, role: str, sections) -> tuple[dict[str, Block], list[str]]:

@@ -24,43 +24,36 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from .constants import (
+    EXPOSURE_ROLES,
+    NO_BASIS,
+    RATE_CHANGE_DEFAULT,
+    RATE_CHANGE_WARNING,
+    UNRANKED_PERIOD,
+    WARNING,
+    WITHIN_LIMITS,
+    A_PERIOD,
+    F_EPI,
+    F_PREMIUM,
+    F_TOTAL,
+    ROLE_EPI,
+    ROLE_HISTORY,
+    read_share,
+)
 from .crosschecks import find_block, match_record
 from .nomenclature import norm
 
-EXPOSURE_ROLES = ("06", "07")
-EXPOSURE_FIELD = "Total"
-PERIOD_ATTRIBUTE = "Period"
+EXPOSURE_FIELD = F_TOTAL
+PERIOD_ATTRIBUTE = A_PERIOD
+THRESHOLD_ATTRIBUTE = RATE_CHANGE_WARNING
+DEFAULT_THRESHOLD = RATE_CHANGE_DEFAULT
 
-THRESHOLD_ATTRIBUTE = "Rate change warning"
-DEFAULT_THRESHOLD = 0.20
-
-OK, WARNING, NO_BASIS = "within limits", "WARNING", "no basis"
-
-PERCENT = re.compile(r"^\s*([0-9.,]+)\s*%\s*$")
-
-
-def _read_share(nomenclature, attribute: str, default: float) -> float:
-    """One ⟦GLOBAL⟧ share, read the same way wherever it is used.
-
-    ``20%``, ``20`` and ``0.2`` all mean twenty per cent: a share above 1 can only have
-    been meant as a percentage. Shared by the three declared thresholds so they cannot
-    drift into reading their own numbers differently.
-    """
-    raw = (getattr(nomenclature, "globals", None) or {}).get(attribute)
-    if raw is None or norm(raw) == "":
-        return default
-    text = norm(raw)
-    percent = PERCENT.match(text)
-    try:
-        value = float((percent.group(1) if percent else text).replace(",", ""))
-    except ValueError:
-        return default
-    return value / 100.0 if (percent or value > 1) else value
+OK = WITHIN_LIMITS
 
 
 def threshold_of(nomenclature) -> float:
     """Declared in ⟦GLOBAL⟧ — the underwriter's number, not the tool's."""
-    return _read_share(nomenclature, THRESHOLD_ATTRIBUTE, DEFAULT_THRESHOLD)
+    return read_share(nomenclature, THRESHOLD_ATTRIBUTE, DEFAULT_THRESHOLD)
 
 
 @dataclass
@@ -195,7 +188,7 @@ def growth_tables(nomenclature, blocks, results=None) -> list[GrowthTable]:
             # figures here match what the reader sees in the block above.
             ordered = sorted(versions,
                              key=lambda b: (_period_key(_period_of(b), order)
-                                            or ((9999, 0, ""),)))
+                                            or ((UNRANKED_PERIOD, 0, ""),)))
             previous = None
             for block in ordered:
                 # Prefer the step-2 records when they are to hand: completing the zone list
@@ -220,17 +213,17 @@ def _attach_premium(table: GrowthTable, blocks, section: str, n: int | None) -> 
     if n is None:
         return
 
-    history = find_block(blocks, "01", section)
+    history = find_block(blocks, ROLE_HISTORY, section)
     if history is not None:
         record = match_record(history, str(n), n)
-        if record is not None and isinstance(record.values.get("Premium"), (int, float)):
-            table.premium_from = (str(n), float(record.values["Premium"]))
+        if record is not None and isinstance(record.values.get(F_PREMIUM), (int, float)):
+            table.premium_from = (str(n), float(record.values[F_PREMIUM]))
 
-    projection = find_block(blocks, "02", section)
+    projection = find_block(blocks, ROLE_EPI, section)
     if projection is not None:
         record = match_record(projection, str(n + 1), n)
-        if record is not None and isinstance(record.values.get("EPI"), (int, float)):
-            table.premium_to = (f"{n + 1} EPI", float(record.values["EPI"]))
+        if record is not None and isinstance(record.values.get(F_EPI), (int, float)):
+            table.premium_to = (f"{n + 1} EPI", float(record.values[F_EPI]))
 
 
 def tables_for_sheet(tables, sheet_name: str) -> list[GrowthTable]:

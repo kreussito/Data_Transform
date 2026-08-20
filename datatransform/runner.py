@@ -11,6 +11,14 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
+from .constants import (
+    FAILED,
+    LOG_RULE_WIDTH,
+    M_HEADER,
+    NOT_AVAILABLE,
+    SKIPPED,
+    VERSION,
+)
 from .crosschecks import hypotheses_from, results_for, run_rules
 from .extract import _number_hypotheses, extract_sheet, last_non_empty_row
 from .growth import growth_tables
@@ -23,7 +31,7 @@ from .specs import SPEC_VERSION, step2_for
 from .transform import Step2Result, apply_step2
 from .writer import write_blocks, write_growth, write_loss_share
 
-TOOL_VERSION = "0.1.0"
+TOOL_VERSION = VERSION
 
 
 @dataclass
@@ -53,7 +61,7 @@ class RunReport:
 
     @property
     def rules_ok(self) -> bool:
-        return all(r.status != "failed" for r in self.rule_results)
+        return all(r.status != FAILED for r in self.rule_results)
 
     @property
     def loss_share_ok(self) -> bool:
@@ -128,13 +136,13 @@ def run(source: str | Path, output: str | Path | None = None,
     debug, process = setup_logs(Path(log_dir), stamp)
     digest = sha256(source)
 
-    process.info("=" * 78)
+    process.info("=" * LOG_RULE_WIDTH)
     process.info("Data_Transform run %s", stamp)
     process.info("source      : %s", source)
     process.info("sha256      : %s", digest)
     process.info("output      : %s", output)
     process.info("spec version: %s   tool version: %s", SPEC_VERSION, TOOL_VERSION)
-    process.info("=" * 78)
+    process.info("=" * LOG_RULE_WIDTH)
     debug.info("run %s started; source=%s sha256=%s", stamp, source, digest)
 
     report = RunReport(source, output, digest, started)
@@ -213,7 +221,7 @@ def run(source: str | Path, output: str | Path | None = None,
                result["injected"], result["unresolved"] or "none")
 
     process.info("")
-    process.info("-" * 78)
+    process.info("-" * LOG_RULE_WIDTH)
     for o in report.outcomes:
         process.info("%-26s %-10s %s", o.sheet, o.status, o.detail)
     process.info("run %s", "completed" if report.ok else "completed WITH ERRORS")
@@ -225,15 +233,15 @@ def _extract_sheet_outcome(title, values_wb, formulas_wb, nomenclature,
     dataset = nomenclature.dataset_for(title)
     if dataset is None:
         debug.info("%s: not declared in sheet 00 — skipped", title)
-        return SheetOutcome(title, "skipped", "not declared in sheet 00")
+        return SheetOutcome(title, SKIPPED, "not declared in sheet 00")
 
     values_ws = values_wb[title]
     markers = read_markers(formulas_wb[title], last_non_empty_row(values_ws))
-    if not any(m.name == "Header" for m in markers):
+    if not any(m.name == M_HEADER for m in markers):
         debug.info("%s: no Header_i marker — nothing extracted", title)
         process.info("")
         process.info("%s — no Header_i in column A, so nothing is extracted (spec §4 M7).", title)
-        return SheetOutcome(title, "skipped", "no Header_i marker")
+        return SheetOutcome(title, SKIPPED, "no Header_i marker")
 
     try:
         blocks = extract_sheet(values_ws, formulas_wb[title], nomenclature, markers)
@@ -310,9 +318,9 @@ def _log_growth(tables, debug, process) -> None:
                          version.period, version.as_at, f"{version.exposure:,.0f}", change)
         rate = table.implied_rate_change
         process.info("    exposure %s · premium %s · implied rate %s  [%s]",
-                     "n/a" if table.exposure_growth is None else f"{table.exposure_growth:+.1%}",
-                     "n/a" if table.premium_growth is None else f"{table.premium_growth:+.1%}",
-                     "n/a" if rate is None else f"{rate:+.1%}", table.status)
+                     NOT_AVAILABLE if table.exposure_growth is None else f"{table.exposure_growth:+.1%}",
+                     NOT_AVAILABLE if table.premium_growth is None else f"{table.premium_growth:+.1%}",
+                     NOT_AVAILABLE if rate is None else f"{rate:+.1%}", table.status)
         if table.status != OK:
             debug.warning("growth %s: %s (implied rate %s)", table.section, table.status, rate)
 
@@ -333,7 +341,7 @@ def _log_loss_share(tables, debug, process) -> None:
         process.info("    warning above %.0f%% of total incurred", table.threshold * 100)
         for row in table.rows:
             status = row.status(table.threshold)
-            share = "n/a" if row.share is None else f"{row.share:.1%}"
+            share = NOT_AVAILABLE if row.share is None else f"{row.share:.1%}"
             process.info("    %-6s declared %12s  incurred %12s  share %7s  %s",
                          row.year, f"{row.declared:,.0f}",
                          "—" if row.incurred is None else f"{row.incurred:,.0f}",

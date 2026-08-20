@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from .constants import FAILED, FMT_AMOUNT, FMT_DATE, FMT_TEXT
+
 
 class Orientation(str, Enum):
     ROW_WISE = "row-wise"
@@ -27,9 +29,9 @@ class FieldType(str, Enum):
     @property
     def number_format(self) -> str:
         return {
-            FieldType.TEXT: "@",
-            FieldType.NUMBER: "#,##0",
-            FieldType.DATE: "yyyy-mm-dd",
+            FieldType.TEXT: FMT_TEXT,
+            FieldType.NUMBER: FMT_AMOUNT,
+            FieldType.DATE: FMT_DATE,
         }[self]
 
     @classmethod
@@ -366,7 +368,7 @@ class RuleResult:
 
     @property
     def ok(self) -> bool:
-        return self.status != "failed"
+        return self.status != FAILED
 
     @property
     def label(self) -> str:

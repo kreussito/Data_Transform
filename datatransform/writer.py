@@ -5,7 +5,17 @@ from __future__ import annotations
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter as col_letter
 
-from .model import Block, Confidence
+from .constants import (
+    CONTROL_MISMATCH,
+    CONTROL_OK,
+    FMT_AMOUNT,
+    FMT_PERCENT,
+    FMT_TEXT,
+    IDENTITY_TOLERANCE,
+    LEVEL_NAMES,
+    NOT_AVAILABLE,
+)
+from .model import Block, Confidence, Orientation
 from .specs import SPEC_VERSION
 from .transform import Step2Result
 
@@ -150,7 +160,7 @@ class BlockWriter:
             self.row += 1
 
         columns = [block.provenance_label, *block.fields]
-        if block.orientation.value == "transposed":
+        if block.orientation is Orientation.TRANSPOSED:
             columns.append("Confidence")
 
         for i, label in enumerate(columns):
@@ -163,7 +173,7 @@ class BlockWriter:
             for i, label in enumerate(block.fields, start=1):
                 self._put(FIRST_COL + i, record.values.get(label), body_f,
                           block.number_format(label))
-            if block.orientation.value == "transposed":
+            if block.orientation is Orientation.TRANSPOSED:
                 self._put(FIRST_COL + len(block.fields) + 1,
                           record.confidence.value if record.confidence else "", note_f)
             self.row += 1
@@ -198,8 +208,9 @@ class BlockWriter:
             letter = col_letter(FIRST_COL + i)
             self._formula(
                 FIRST_COL + i,
-                f'=IF(ABS({letter}{control_row}-{letter}{expected_row})<=0.5,"OK","MISMATCH")',
-                "OK", None, ctrl_f,
+                f'=IF(ABS({letter}{control_row}-{letter}{expected_row})'
+                f'<={IDENTITY_TOLERANCE},"{CONTROL_OK}","{CONTROL_MISMATCH}")',
+                CONTROL_OK, None, ctrl_f,
             )
         self.row += 1
 
@@ -307,8 +318,9 @@ class BlockWriter:
             letter = col_letter(col_of[label])
             self._formula(
                 col_of[label],
-                f'=IF(ABS({letter}{control_row}-{letter}{tie_row})<=0.5,"OK","MISMATCH")',
-                "OK", None, ctrl_f,
+                f'=IF(ABS({letter}{control_row}-{letter}{tie_row})'
+                f'<={IDENTITY_TOLERANCE},"{CONTROL_OK}","{CONTROL_MISMATCH}")',
+                CONTROL_OK, None, ctrl_f,
             )
         self.row += 1
         if calc_names:
@@ -330,8 +342,6 @@ class BlockWriter:
         what was done: it is something the underwriter has to answer, and an answer needs
         somewhere to be written down.
         """
-        from .bridge import LEVEL_NAMES
-
         finding = result.level_finding
         if finding is None:
             return
@@ -546,7 +556,7 @@ def write_loss_share(ws, table) -> list[tuple[str, str, float]]:
                 row.share, "0.0%", ctrl_f,
             )
         else:
-            writer._put(share_col, "n/a", note_f)
+            writer._put(share_col, NOT_AVAILABLE, note_f)
         status = row.status(table.threshold)
         writer._put(status_col, status, ctrl_f,
                     fill=None if status == OK else ctrl_fill)
