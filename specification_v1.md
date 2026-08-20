@@ -1727,12 +1727,31 @@ already in `⟦GLOBAL⟧`, where the underwriter can see it beside the figures i
 | T3 | A pre-flight pass scans for external links, error cells and merged ranges before extraction |
 | T4 | Pivot tables are **not carried into the output**. Reviewers do not need them there, and the source workbook is preserved untouched, so plain `openpyxl` is sufficient throughout |
 | T5 | A run may not write over its own source: the source is the audit baseline, and an output path equal to it is refused |
+| T6 | **One third-party package**, `openpyxl`. Everything else is the standard library, and no external program — Excel included — is needed to read or write a workbook |
+| T7 | Every text file the tool writes declares **UTF-8** explicitly, and the console streams are put into UTF-8 before the first line is printed |
 
 T2 exists because a silently zeroed error cell reaches an underwriter under a
 clean-looking control sum.
 
 T3 earns its keep on a hand-assembled workbook: copied sheets carry formulas pointing at
 absent source files, which resolve to stale caches or `#REF!`.
+
+T6 is what makes "copy the folder onto the machine" a real installation route. Underwriting
+desktops are locked down; a tool needing a database or a compiler does not get installed,
+and one needing Excel automation cannot run unattended.
+
+**T7 and Windows.** The tool's own vocabulary is not ASCII — `⟦…⟧` anchors the blocks of
+sheet `00`, notes use `→` and `·` — and none of those exist in **cp1252**, which is still
+what Python uses for `stdout` on Windows when the output is redirected to a file or a
+pipe. Left alone, the failure is a nasty one: the workbook is read, the blocks are
+written, both logs are complete, and then the *summary line* raises `UnicodeEncodeError`.
+The user sees a traceback and reasonably concludes the run failed, with the finished
+output sitting on disk beside them.
+
+So the streams are reconfigured before the first print. Where that is impossible, the
+fallback is `backslashreplace` rather than `replace`: `\u27e6` is ugly, but it says an
+anchor was there, where a `?` says nothing was — and turning information into nothing
+quietly is the one thing this tool must not do, on the way out as much as on the way in.
 
 ---
 

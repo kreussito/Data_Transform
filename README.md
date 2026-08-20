@@ -28,37 +28,83 @@ excluded simply by not being marked — no heuristics guess at intent.
 
 ## Getting it onto a machine
 
-Everything the tool needs is in the repository plus **one** third-party package. There is
-no database, no service, no build step and no configuration file — a clone and an install.
+Everything the tool needs is in the repository plus **one** third-party package. No
+database, no service, no build step, no configuration file — a clone and an install.
 
-**Prerequisites:** Python 3.10 or newer (developed and tested on 3.11) and git.
+**Prerequisites:** Python 3.10 or newer and git. Nothing else — in particular **Excel is
+not required**, on any platform: the tool reads and writes `.xlsx` directly and caches a
+value for every formula it emits, so the figures are readable without a recalculation.
+
+### Windows
+
+Install Python from [python.org](https://www.python.org/downloads/windows/) or the
+Microsoft Store, ticking **"Add python.exe to PATH"**. Then, in PowerShell:
+
+```powershell
+git clone https://github.com/kreussito/Data_Transform.git
+cd Data_Transform
+
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+```
+
+If PowerShell refuses to run the activation script — *"running scripts is disabled on
+this system"* — that is Windows' execution policy, not a problem with this repository:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+Or skip activation entirely and call the interpreter in the environment directly:
+`.venv\Scripts\python.exe -m datatransform ...`.
+
+**On a locked-down machine with no git and no internet**, copy the folder across and use
+the bundled dependency instead:
+
+```powershell
+py -m venv .venv
+.venv\Scripts\python.exe -m pip install --no-index --find-links vendor openpyxl
+.venv\Scripts\python.exe -m datatransform "C:\path\to\Intake.xlsx"
+```
+
+(`pip download openpyxl -d vendor` on a connected machine first, then carry `vendor/`
+along.) Everything else the tool uses is the standard library.
+
+### macOS / Linux
 
 ```bash
 git clone https://github.com/kreussito/Data_Transform.git
 cd Data_Transform
 
-# macOS / Linux
 python3 -m venv .venv && source .venv/bin/activate
-
-# Windows PowerShell
-#   py -m venv .venv
-#   .venv\Scripts\Activate.ps1
-
 pip install -e ".[dev]"
 ```
 
-Then prove it works before trusting it with real data:
+### Proving it works before trusting it with real data
 
 ```bash
-pytest                               # 303 tests — the specification's rules
-python -m datatransform Intake_v1.xlsx -o output/Intake_v1_transformed.xlsx
+pytest                                # 407 tests — the specification's rules
+python -m datatransform Intake_FireCatFull_v1.xlsx -o out.xlsx
 ```
 
-The second command writes the transformed workbook and two logs, and prints a per-sheet
-summary. If both succeed, the machine is set up correctly.
+The second command writes the transformed workbook and two logs and prints a per-sheet
+summary. If both succeed, the machine is set up correctly. `pytest` includes a
+`test_portability.py` that runs the CLI in a subprocess under a Windows ANSI code page,
+so a machine that would have failed on encoding fails the test suite first.
 
 Without the dev extra, `pip install -e .` (or just `pip install openpyxl`) is enough to
 run the tool; the extra only adds `pytest` and `ruff`.
+
+### Things that differ on Windows, and are handled
+
+| | |
+|---|---|
+| **Redirected output** | `stdout` falls back to cp1252 when piped to a file, and neither `⟦` nor `→` exists there. The CLI puts its streams into UTF-8 before printing anything; where a console genuinely cannot, characters are shown as `\u27e6` rather than replaced by `?` — ugly, but it says something was there |
+| **Log files** | Written UTF-8 explicitly, not in the machine's code page, so a log written on Windows reads the same everywhere |
+| **Paths with spaces** | `C:\Users\...\My Documents\` works; quote the argument as usual. Covered by a test |
+| **Where output lands** | Beside the *source* workbook when `-o` is omitted, not in the current directory — which on a mapped network drive may not be writable |
+| **Excel** | Not needed. Nor is LibreOffice |
 
 ## Usage
 
