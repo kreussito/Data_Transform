@@ -339,10 +339,20 @@ def test_the_process_log_records_the_growth(tmp_path):
 
 from datatransform.bridge import build_bridge, fit_margins      # noqa: E402
 from datatransform.model import Confidence, SplitRule           # noqa: E402
-from datatransform.specs import Split, Step2Spec                # noqa: E402
-from datatransform.transform import _split                      # noqa: E402
+from datatransform.operations import Context                    # noqa: E402
+from datatransform.operations.split import Split                # noqa: E402
 
-SPEC = Step2Spec(sort_by=("Zone",), split=Split(total="Total"))
+SPEC = Split(total="Total")
+
+
+def _split(block, spec, records, nomenclature, blocks=None):
+    """The old six-tuple, so these tests keep testing the split and not the plumbing."""
+    ctx = Context(block=block, records=list(records),
+                  nomenclature=nomenclature, blocks=blocks)
+    spec.apply(ctx)
+    return (ctx.records, ctx.flags.get("split_fields", ()), ctx.notes,
+            ctx.flags.get("parts_from_total", False), ctx.assumed_fields,
+            ctx.level_finding)
 
 
 def _bridge(section="Hurricane", covers=("Building", "Content", "BI")):

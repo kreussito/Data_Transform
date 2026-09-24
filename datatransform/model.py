@@ -193,10 +193,8 @@ class Block:
         """
         from .specs import step2_for
 
-        spec = step2_for(self.dataset.key)
-        bounds = getattr(spec, "bounds", None) if spec else None
-        excluded = {bounds.lower, bounds.upper} if bounds else set()
-        excluded |= set(getattr(spec, "not_summable", ()) if spec else ())
+        pipeline = step2_for(self.dataset.key)
+        excluded = pipeline.excluded_measures() if pipeline else set()
         return tuple(f for f in self.numeric_fields if f not in excluded)
 
     def number_format(self, label: str) -> str:

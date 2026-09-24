@@ -260,9 +260,9 @@ class BlockWriter:
             self._put(FIRST_COL + i, label, head_f, fill=step2_fill)
         self.row += 1
 
-        calc_names = ([c.name for c in result.spec.calculations]
-                      + [c.name for c in result.spec.cumulative])
-        col_of = {label: FIRST_COL + 1 + i for i, label in enumerate(result.columns)}
+        calc_names = [c.name for c in result.derived]
+        col_of = {label: FIRST_COL + 1 + i
+                  for i, label in enumerate(result.columns)}
 
         first_data = self.row
         for n, record in enumerate(result.records):
@@ -270,30 +270,33 @@ class BlockWriter:
             for label in result.declared_columns:
                 self._put(col_of[label], record.values.get(label), body_f,
                           block.number_format(label))
-            for calc in result.spec.calculations:
-                expected = result.computed[calc.name][n]
-                formula = calc.expression
+            for column in result.derived:
+                if column.formula is None:
+                    continue
+                formula = column.formula
                 for fld in result.declared_columns:
                     formula = formula.replace(
                         "{" + fld + "}", f"{col_letter(col_of[fld])}{self.row}"
                     )
-                self._formula(col_of[calc.name], f"=IFERROR({formula},\"\")",
-                              expected, calc.number_format, body_f)
+                self._formula(col_of[column.name], f"=IFERROR({formula},\"\")",
+                              column.values[n], column.number_format, body_f)
             self.row += 1
         last_data = self.row - 1
 
         # Cumulative shares, written as live ranges so a reviewer can see the running
         # sum and the total it is divided by — spec §9.2.1 S17.
-        for cum in result.spec.cumulative:
-            letter = col_letter(col_of[cum.field])
+        for column in result.derived:
+            if column.running_of is None:
+                continue
+            letter = col_letter(col_of[column.running_of])
             for n, _ in enumerate(result.records):
                 row = first_data + n
                 self.row = row
                 self._formula(
-                    col_of[cum.name],
+                    col_of[column.name],
                     f"=IFERROR(SUM({letter}${first_data}:{letter}{row})"
                     f"/SUM({letter}${first_data}:{letter}${last_data}),\"\")",
-                    result.computed[cum.name][n], cum.number_format, body_f,
+                    column.values[n], column.number_format, body_f,
                 )
             self.row = last_data + 1
 

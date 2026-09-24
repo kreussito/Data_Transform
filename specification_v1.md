@@ -1997,6 +1997,43 @@ pytest tests/
 The pipeline makes **two passes**: every sheet is extracted first, so `⟦RULES⟧` has both
 sides of each crosscheck available, and only then is anything transformed and written.
 
+### 14.0 Step 2 is a declared pipeline
+
+A dataset does not carry a bag of optional settings; it declares an **ordered list of
+operations**, and the order is part of the declaration:
+
+```python
+STEP2["06 EQ Aggs"] = Pipeline(
+    Split(total="Total"),                    # before Identity: it needs the buckets
+    Identity(total="Total"),                 # parts from ⟦AXES⟧
+    Complete(key="Zone", catalogue_attribute="Zone scheme"),
+    SortBy(("Zone",)),
+    Cumulative("Cumulative exposure %", "Total"),
+)
+```
+
+Two rules used to live nowhere but in the sequence the code happened to run, and both
+were found by being got wrong:
+
+| | Why |
+|---|---|
+| `Split` before `Identity` | the identity has nothing to reconcile until the buckets exist |
+| `SortBy` before `Change` | "the year before" is meaningless in an unsorted list |
+
+Each operation reads a context and adds to it — records, columns, notes, tables,
+findings — and says in the sheet what it did. A new mechanic is a new class implementing
+one method, not a fourteenth field on a growing dataclass.
+
+**What is *not* an operation.** Three things run on every pipeline and are therefore not
+a dataset's choice: the column order note (it must come after everything that can add a
+field), the aggregate-total check (S15) and the value-preserving control (S6). Leaving
+any of them to the declaration would be one more way to get an ordering wrong.
+
+An operation also states what it makes that must never be totalled: `Change` excludes both
+the rate and the change, `DeriveBounds` excludes its two bounds. That used to be repeated
+in the dataset's declaration, where it could disagree with the operation that created the
+column.
+
 ### 14.1 Step 2 for datasets 01 and 02
 
 Held in `specs.py`, since sort order and derived measures are mechanics rather than

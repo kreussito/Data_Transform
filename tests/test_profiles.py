@@ -307,14 +307,15 @@ def test_a_profile_needs_no_label_column(tmp_path):
 
 def test_a_block_with_neither_label_nor_bounds_is_fatal():
     """Nothing to extract and nothing to read off — say so rather than sort on nothing."""
-    from datatransform.specs import Bounds, Step2Spec
+    from datatransform.operations import Pipeline
+    from datatransform.operations.bounds import DeriveBounds
+    from datatransform.operations.order import SortBy
 
     nomenclature, profiles = _profiles(FIRE)
     block = profiles[0]
     block.address_map = {k: v for k, v in block.address_map.items()
                          if k not in ("Band", "Band from", "Band to")}
-    spec = Step2Spec(sort_by=("Premium",),
-                     bounds=Bounds("Band", "Band from", "Band to"))
+    spec = Pipeline(DeriveBounds("Band", "Band from", "Band to"), SortBy(("Premium",)))
     with pytest.raises(ExtractionError, match="band bounds cannot be produced"):
         apply_step2(block, spec, nomenclature)
 

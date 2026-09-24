@@ -244,10 +244,10 @@ def test_step2_is_value_preserving(books, nomenclature):
 
 def test_step2_guard_catches_a_value_changing_bug(books, nomenclature, monkeypatch):
     """Sorting cannot move a total; if it does, that is a bug — spec §10 C3."""
-    from datatransform import transform as tmod
+    from datatransform.operations import order as omod
 
     b = _block(books, nomenclature, ROW_WISE)
-    monkeypatch.setattr(tmod, "sorted", lambda seq, **kw: list(seq)[:-1], raising=False)
+    monkeypatch.setattr(omod, "sorted", lambda seq, **kw: list(seq)[:-1], raising=False)
     with pytest.raises(ExtractionError, match="value-preserving"):
         apply_step2(b, step2_for(b.dataset.key))
 
@@ -1053,7 +1053,7 @@ def test_aggregate_total_ties_to_the_detail(books, nomenclature):
 
 
 def test_grouping_that_loses_records_is_fatal(books, nomenclature, monkeypatch):
-    from datatransform import transform as tmod
+    from datatransform.operations import tables as tmod
 
     b = _block(books, nomenclature, LARGE)
     real = tmod._aggregate
