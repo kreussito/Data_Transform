@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# To run the test suite and the linter.
+pytest>=8.0
+ruff>=0.5

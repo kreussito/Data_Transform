@@ -1,0 +1,2 @@
+# Runtime. The only third-party package the tool needs.
+openpyxl>=3.1
